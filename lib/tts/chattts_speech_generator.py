@@ -29,10 +29,10 @@ class ChatTTSConfig:
     """Configuration for ChatTTS generation."""
     sample_rate: int = 24000
     output_format: str = "wav"
-    temperature: float = 0.7  # Controls randomness/expressiveness
-    top_k: int = 20
-    top_p: float = 0.7
-    device: str = "cpu"  # cpu or cuda
+    temperature: float = 0.4  # Slightly higher for more natural variation
+    top_k: int = 25           # Slightly wider for more natural vocabulary
+    top_p: float = 0.75       # Slightly higher for more conversational flow
+    device: str = "cpu"       # cpu or cuda
     use_decoder: bool = True  # Better quality but slower
 
 
@@ -104,7 +104,7 @@ class ChatTTSSpeechGenerator:
         if not self.chat:
             return self._fallback_response("ChatTTS engine not available")
         
-        # Extract text from monologue - make sure we don't mix up dict and config
+        # Extract text from monologue
         try:
             full_text = self._extract_text_from_monologue(monologue)
             print(f"   Extracted {len(full_text)} characters of text")
@@ -116,123 +116,103 @@ class ChatTTSSpeechGenerator:
         
         # Generate output path if not provided
         if not output_path:
-            # Create audio output directory
             project_dir = Path(__file__).parent.parent.parent
             audio_dir = project_dir / "audio_output"
             audio_dir.mkdir(exist_ok=True)
             
-            # Safe filename from topic
             topic = monologue.get('topic', 'unknown').replace(' ', '_').replace('/', '_')
             safe_topic = ''.join(c for c in topic if c.isalnum() or c in '_-')[:50]
             output_path = audio_dir / f"{safe_topic}_chattts.{self.config.output_format}"
         
-        # Generate speech
+        # Generate speech using clean basic approach
         try:
-            print(f"🗣️  Generating natural conversational speech: {output_path}")
-            print(f"   Config type: {type(self.config)}")
-            print(f"   Config: {self.config}")
+            print(f"🗣️  Generating natural speech: {output_path}")
+            print(f"   Config: temperature={self.config.temperature}, top_k={self.config.top_k}, top_p={self.config.top_p}")
             
-            # Split text into manageable chunks for better processing
-            text_chunks = self._split_text_for_tts(full_text)
+            # Clean and normalize text
+            clean_text = self._normalize_text_for_tts(full_text)
             
-            # Generate consistent speaker for all chunks (use fixed seed for consistency)
-            print("   Setting up consistent voice parameters...")
-            torch.manual_seed(42)  # Fixed seed for reproducible voice
+            # Split into manageable chunks
+            text_chunks = self._split_text_for_tts(clean_text, max_length=150)
+            print(f"   Processing {len(text_chunks)} text chunks")
             
-            all_audio = []
+            # Sample a consistent speaker for all chunks
+            print("   Sampling consistent speaker voice...")
+            rand_spk = self.chat.sample_random_speaker()
             
-            # Generate a consistent speaker sample for the first chunk, then reuse it
-            speaker_wav = None
+            # Set up inference parameters
+            params_infer_code = ChatTTS.Chat.InferCodeParams(
+                spk_emb=rand_spk,
+                temperature=self.config.temperature,
+                top_P=self.config.top_p,
+                top_K=self.config.top_k
+            )
             
+            # Add minimal prosodic enhancement for more natural speech
+            enhanced_chunks = []
             for i, chunk in enumerate(text_chunks):
-                print(f"   Processing chunk {i+1}/{len(text_chunks)} with consistent voice")
-                
-                # Generate audio for this chunk using consistent parameters
-                params_infer_code = self.chat.InferCodeParams()
-                params_infer_code.temperature = self.config.temperature
-                params_infer_code.top_K = self.config.top_k
-                params_infer_code.top_P = self.config.top_p
-                
-                # Use deterministic seed for each chunk to maintain voice consistency
-                params_infer_code.manual_seed = 42 + i  # Slight variation but consistent pattern
-                
-                # Add prosodic enhancement for better quality
-                params_refine_text = self.chat.RefineTextParams()
-                params_refine_text.temperature = self.config.temperature
-                
-                # Apply quality-enhancing prosodic tokens based on content
-                enhanced_chunk = self._enhance_text_with_prosodic_tokens(chunk, i)
-                
-                print(f"   Using params: temp={params_infer_code.temperature}, top_K={params_infer_code.top_K}, top_P={params_infer_code.top_P}")
-                print(f"   Enhanced text: {enhanced_chunk[:100]}...")
-                
-                # Generate audio with enhanced parameters
-                wavs = self.chat.infer(
-                    [enhanced_chunk], 
-                    params_infer_code=params_infer_code,
-                    params_refine_text=params_refine_text
-                )
-                
-                if wavs and len(wavs) > 0:
-                    all_audio.append(wavs[0])
+                # Add very subtle natural speech tokens (minimal and safe)
+                if i == 0:
+                    # Only add slight oral characteristic to first chunk
+                    enhanced_chunk = f"[oral_2]{chunk}"
+                else:
+                    enhanced_chunk = chunk
+                enhanced_chunks.append(enhanced_chunk)
             
-            if not all_audio:
+            # Generate audio for all chunks at once
+            print(f"   Generating speech for all chunks with minimal enhancement...")
+            wavs = self.chat.infer(enhanced_chunks, params_infer_code=params_infer_code)
+            
+            if not wavs or len(wavs) == 0:
                 return self._fallback_response("No audio generated from text")
             
             # Concatenate all audio chunks
-            if len(all_audio) > 1:
-                final_audio = np.concatenate(all_audio)
+            if len(wavs) > 1:
+                final_audio = np.concatenate(wavs)
             else:
-                final_audio = all_audio[0]
+                final_audio = wavs[0]
             
-            # Save to file (handle WSL permission issues)
+            # Save to file using torchaudio for better compatibility
             try:
-                wavfile.write(str(output_path), self.config.sample_rate, final_audio)
-                print(f"✅ Audio saved successfully")
-            except PermissionError as pe:
-                # Common WSL issue - file is often created despite the error
-                print(f"⚠️ Permission warning during save, checking if file exists...")
+                # Convert to torch tensor for torchaudio
+                audio_tensor = torch.from_numpy(final_audio)
+                if len(audio_tensor.shape) == 1:
+                    audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
                 
-            # Check if file was created and get stats (even if wavfile.write raised an error)
-            if os.path.exists(output_path):
+                # Try torchaudio first
                 try:
-                    file_size = os.path.getsize(output_path)
-                    duration_estimate = len(final_audio) / self.config.sample_rate
-                    print(f"✅ Audio file verified: {file_size:,} bytes, {duration_estimate:.1f}s duration")
+                    import torchaudio
+                    torchaudio.save(str(output_path), audio_tensor, self.config.sample_rate)
+                    print(f"✅ Audio saved with torchaudio")
+                except:
+                    # Fallback to scipy
+                    wavfile.write(str(output_path), self.config.sample_rate, final_audio)
+                    print(f"✅ Audio saved with scipy")
                     
-                    return {
-                        "success": True,
-                        "output_path": str(output_path),
-                        "file_size": file_size,
-                        "estimated_duration": duration_estimate,
-                        "text_word_count": len(full_text.split()),
-                        "tts_config": {
-                            "model": "ChatTTS",
-                            "sample_rate": self.config.sample_rate,
-                            "format": self.config.output_format,
-                            "device": self.config.device,
-                            "temperature": self.config.temperature
-                        },
-                        "engine": "chattts"
-                    }
-                except Exception as e:
-                    print(f"⚠️ File exists but cannot read stats: {e}")
-                    # File exists but we can't get stats - still return success
-                    return {
-                        "success": True,
-                        "output_path": str(output_path),
-                        "file_size": len(final_audio) * 4,  # Estimate for float32
-                        "estimated_duration": len(final_audio) / self.config.sample_rate,
-                        "text_word_count": len(full_text.split()),
-                        "tts_config": {
-                            "model": "ChatTTS",
-                            "sample_rate": self.config.sample_rate,
-                            "format": self.config.output_format,
-                            "device": self.config.device,
-                            "temperature": self.config.temperature
-                        },
-                        "engine": "chattts"
-                    }
+            except Exception as save_error:
+                print(f"⚠️ Save error: {save_error}, checking if file exists...")
+                
+            # Verify file was created
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                duration_estimate = len(final_audio) / self.config.sample_rate
+                print(f"✅ Audio verified: {file_size:,} bytes, {duration_estimate:.1f}s duration")
+                
+                return {
+                    "success": True,
+                    "output_path": str(output_path),
+                    "file_size": file_size,
+                    "estimated_duration": duration_estimate,
+                    "text_word_count": len(full_text.split()),
+                    "tts_config": {
+                        "model": "ChatTTS",
+                        "sample_rate": self.config.sample_rate,
+                        "format": self.config.output_format,
+                        "temperature": self.config.temperature,
+                        "chunks_processed": len(text_chunks)
+                    },
+                    "engine": "chattts"
+                }
             else:
                 return self._fallback_response("Audio file was not created")
                 
@@ -336,11 +316,9 @@ class ChatTTSSpeechGenerator:
         
         return text
 
-    def _split_text_for_tts(self, text: str, max_length: int = 200) -> List[str]:
+    def _split_text_for_tts(self, text: str, max_length: int = 150) -> List[str]:
         """Split long text into chunks suitable for TTS processing."""
-        # First normalize the text to fix number/date issues
-        text = self._normalize_text_for_tts(text)
-        
+        # Split by sentences
         sentences = text.replace('. ', '.|').replace('! ', '!|').replace('? ', '?|').split('|')
         
         chunks = []
@@ -366,49 +344,6 @@ class ChatTTSSpeechGenerator:
             chunks.append(current_chunk.strip())
         
         return chunks if chunks else [text]
-    
-    def _enhance_text_with_prosodic_tokens(self, text: str, chunk_index: int) -> str:
-        """
-        Enhance text with prosodic control tokens for better speech quality.
-        
-        Args:
-            text: The text chunk to enhance
-            chunk_index: Index of the chunk for variation
-            
-        Returns:
-            Enhanced text with prosodic tokens
-        """
-        import re
-        
-        # Apply different enhancements based on content and position
-        enhanced_text = text
-        
-        # Add natural oral characteristics (varies by chunk for variety)
-        oral_level = min(2 + (chunk_index % 3), 4)  # Varies between 2-4
-        enhanced_text = f"[oral_{oral_level}]" + enhanced_text
-        
-        # Add strategic pauses for better pacing
-        # Add breaks after sentences ending with periods
-        enhanced_text = re.sub(r'\.(\s+)', r'.[break_2]\1', enhanced_text)
-        
-        # Add shorter breaks after commas for natural pacing
-        enhanced_text = re.sub(r',(\s+)', r',[uv_break]\1', enhanced_text)
-        
-        # Add slight pauses before questions for emphasis
-        enhanced_text = re.sub(r'\s+(\w+\?)', r' [uv_break]\1', enhanced_text)
-        
-        # Add very subtle laughter for engaging content (sparingly)
-        if chunk_index == 0 or '!' in text or 'interesting' in text.lower() or 'amazing' in text.lower():
-            # Only add light laughter to first chunk or exciting content
-            enhanced_text = enhanced_text + "[laugh_0]"
-        
-        # Add end-of-chunk pause for natural flow between chunks
-        if not enhanced_text.endswith(('.', '!', '?')):
-            enhanced_text += "[break_3]"
-        else:
-            enhanced_text += "[break_2]"
-        
-        return enhanced_text
     
     def _fallback_response(self, error_message: str) -> Dict[str, Any]:
         """Fallback response when speech generation fails."""
@@ -445,41 +380,48 @@ class ChatTTSSpeechGenerator:
 
 
 def get_recommended_voice_settings() -> List[Dict[str, Any]]:
-    """Get recommended voice settings for different use cases with quality optimizations."""
+    """Get recommended voice settings for different use cases."""
     return [
         {
             "name": "natural",
-            "description": "Balanced, natural-sounding speech with prosodic enhancement",
-            "temperature": 0.6,  # Slightly lower for better consistency
-            "top_k": 15,         # More focused vocabulary
-            "top_p": 0.7
+            "description": "Conversational, natural-sounding speech (default)",
+            "temperature": 0.4,  # Slightly higher for natural variation
+            "top_k": 25,         # Wider vocabulary for natural speech
+            "top_p": 0.75        # More conversational flow
+        },
+        {
+            "name": "conversational",
+            "description": "Natural conversation style with good consistency",
+            "temperature": 0.45, # Sweet spot for natural but consistent
+            "top_k": 28,         # Good vocabulary range
+            "top_p": 0.8         # Natural conversational flow
         },
         {
             "name": "expressive", 
-            "description": "More animated and expressive with enhanced prosody",
-            "temperature": 0.8,  # Slightly lower for control
-            "top_k": 25,         # Wider vocabulary for expressiveness
-            "top_p": 0.8
+            "description": "More animated and expressive",
+            "temperature": 0.6,  # Higher for more variation
+            "top_k": 30,         # Wider vocabulary
+            "top_p": 0.85
         },
         {
             "name": "calm",
-            "description": "Calm, measured delivery with subtle prosodic control",
-            "temperature": 0.4,  # Lower for calm delivery
-            "top_k": 12,         # More conservative
-            "top_p": 0.6
+            "description": "Calm, measured delivery",
+            "temperature": 0.25, # Lower for calm delivery
+            "top_k": 18,         # More conservative
+            "top_p": 0.65
         },
         {
             "name": "consistent",
-            "description": "Very consistent, predictable speech with minimal prosody",
-            "temperature": 0.2,  # Very low for maximum consistency
-            "top_k": 8,          # Highly focused
-            "top_p": 0.4         # Conservative sampling
+            "description": "Very consistent, predictable speech",
+            "temperature": 0.2,  # Low for maximum consistency
+            "top_k": 15,         # Highly focused
+            "top_p": 0.6         # Conservative sampling
         },
         {
             "name": "high_quality",
-            "description": "Optimized for maximum quality with advanced prosodic control",
-            "temperature": 0.5,  # Balanced for quality
-            "top_k": 12,         # Focused but not restrictive
-            "top_p": 0.6         # Conservative but natural
+            "description": "GitHub example settings for best quality",
+            "temperature": 0.3,  # GitHub example
+            "top_k": 20,         # GitHub example
+            "top_p": 0.7         # GitHub example
         }
     ]

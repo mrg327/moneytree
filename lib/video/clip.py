@@ -236,14 +236,18 @@ class VideoClip:
             
         try:
             # Load audio for timing analysis
-            logger.info("<� Analyzing audio for caption timing...")
+            logger.info("🎬 Creating synchronized captions...")
             audio_clip = AudioFileClip(audio_path)
             
             # Analyze audio for speech timing
             timing_data = self._analyze_speech_timing(audio_path, text)
             
-            # Generate caption clips
-            caption_clips = self._create_caption_clips(timing_data, style)
+            # Get target dimensions from the template video
+            target_resolution = self.video_config.get_target_resolution()
+            width, height = target_resolution
+            
+            # Create caption clips with improved positioning
+            caption_clips = self._create_caption_clips_with_dimensions(timing_data, style, width, height)
             
             # Store for final composition
             self.video_components.extend(caption_clips)
@@ -252,6 +256,7 @@ class VideoClip:
                 "success": True,
                 "caption_count": len(caption_clips),
                 "total_duration": audio_clip.duration,
+                "dimensions": target_resolution,
                 "timing_method": "speech_analysis"
             }
             
@@ -381,6 +386,139 @@ class VideoClip:
         
         return timing_data
     
+    def _create_caption_clips_with_dimensions(
+        self, 
+        timing_data: List[Dict[str, Any]], 
+        style: CaptionStyle, 
+        width: int, 
+        height: int
+    ) -> List[Any]:
+        """
+        Create caption clips with precise positioning based on video dimensions.
+        
+        Args:
+            timing_data: List of caption timing information
+            style: Caption styling options
+            width: Video width
+            height: Video height
+            
+        Returns:
+            List of TextClip objects for captions
+        """
+        caption_clips = []
+        
+        for caption_info in timing_data:
+            try:
+                # Calculate position for text placement using pixel coordinates
+                if style.position == 'bottom':
+                    position = ('center', int(height * 0.75))  # 75% down from top
+                elif style.position == 'top':
+                    position = ('center', int(height * 0.25))  # 25% down from top
+                else:  # center
+                    position = ('center', int(height * 0.45))  # Slightly above center
+                
+                # Wrap text for better display
+                text = self._wrap_text_for_display(caption_info['text'], style)
+                
+                # Create text clip with enhanced styling
+                txt_clip = self._create_styled_text_clip(
+                    text, 
+                    style, 
+                    position, 
+                    caption_info['start'], 
+                    caption_info['duration']
+                )
+                
+                if txt_clip:
+                    caption_clips.append(txt_clip)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to create caption clip for '{caption_info['text'][:30]}...': {e}")
+                continue
+        
+        logger.info(f"✅ Created {len(caption_clips)} caption clips")
+        return caption_clips
+    
+    
+    def _wrap_text_for_display(self, text: str, style: CaptionStyle) -> str:
+        """Wrap text appropriately for video display."""
+        # Character limits based on position and screen size
+        if style.position == 'center':
+            max_chars_per_line = 25  # Center has more flexibility
+        elif style.position == 'top':
+            max_chars_per_line = 20  # Top needs more conservative spacing
+        else:  # bottom
+            max_chars_per_line = 22  # Bottom positioning
+        
+        # Only wrap if text is longer than limit
+        if len(text) <= max_chars_per_line:
+            return text
+            
+        words = text.split()
+        lines = []
+        current_line = ""
+        
+        for word in words:
+            # Test if adding this word would exceed the limit
+            test_line = current_line + (" " if current_line else "") + word
+            if len(test_line) <= max_chars_per_line:
+                current_line = test_line
+            else:
+                # Current line is full, start new line
+                if current_line:
+                    lines.append(current_line)
+                    current_line = word
+                else:
+                    # Single word is too long, truncate it
+                    current_line = word[:max_chars_per_line-3] + "..."
+        
+        # Don't forget the last line
+        if current_line:
+            lines.append(current_line)
+        
+        # Limit to 2 lines max and join with actual newlines
+        return '\n'.join(lines[:2])
+    
+    def _create_styled_text_clip(
+        self, 
+        text: str, 
+        style: CaptionStyle, 
+        position: tuple, 
+        start_time: float, 
+        duration: float
+    ):
+        """Create a styled text clip with better error handling."""
+        try:
+            # Create text clip with full styling options
+            clip_kwargs = {
+                'text': text,
+                'font_size': style.font_size,
+                'color': style.font_color,
+                'stroke_color': style.stroke_color,
+                'stroke_width': style.stroke_width
+            }
+            
+            # Only add font if specified
+            if style.font_family:
+                clip_kwargs['font'] = style.font_family
+            
+            txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(start_time).with_duration(duration)
+            return txt_clip
+            
+        except Exception as clip_error:
+            logger.warning(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
+            # Fallback to minimal TextClip creation
+            try:
+                txt_clip = TextClip(
+                    text=text,
+                    font_size=style.font_size,
+                    color=style.font_color
+                ).with_position(position).with_start(start_time).with_duration(duration)
+                return txt_clip
+            except Exception as fallback_error:
+                logger.error(f"Failed to create even minimal TextClip: {fallback_error}")
+                return None
+    
     def _create_caption_clips(self, timing_data: List[Dict[str, Any]], style: CaptionStyle) -> List[Any]:
         """Create MoviePy TextClip objects for captions."""
         caption_clips = []
@@ -455,7 +593,7 @@ class VideoClip:
                     
                     txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
                 except Exception as clip_error:
-                    logger.warning(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
+                    logger.exception(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
                     # Fallback to minimal TextClip creation
                     txt_clip = TextClip(
                         text=text,

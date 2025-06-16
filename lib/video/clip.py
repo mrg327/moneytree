@@ -256,7 +256,7 @@ class VideoClip:
             }
             
         except Exception as e:
-            logger.info(f"L Caption generation failed: {e}")
+            logger.exception(f"Caption generation failed: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -428,20 +428,29 @@ class VideoClip:
                     # Limit to 2 lines max and join with actual newlines
                     text = '\n'.join(lines[:2])
                 
-                # Create text clip (MoviePy 2.x syntax)
-                clip_kwargs = {
-                    'text': text,
-                    'font_size': style.font_size,
-                    'color': style.font_color,
-                    'stroke_color': style.stroke_color,
-                    'stroke_width': style.stroke_width
-                }
-                
-                # Only add font if specified (let MoviePy use system default otherwise)
-                if style.font_family:
-                    clip_kwargs['font'] = style.font_family
-                
-                txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
+                # Create text clip with better error handling (MoviePy 2.x syntax)
+                try:
+                    clip_kwargs = {
+                        'text': text,
+                        'font_size': style.font_size,
+                        'color': style.font_color,
+                        'stroke_color': style.stroke_color,
+                        'stroke_width': style.stroke_width
+                    }
+                    
+                    # Only add font if specified (let MoviePy use system default otherwise)
+                    if style.font_family:
+                        clip_kwargs['font'] = style.font_family
+                    
+                    txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
+                except Exception as clip_error:
+                    logger.warning(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
+                    # Fallback to minimal TextClip creation
+                    txt_clip = TextClip(
+                        text=text,
+                        font_size=style.font_size,
+                        color=style.font_color
+                    ).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
                 
                 # Validate clip before adding
                 if txt_clip is None:
@@ -588,11 +597,16 @@ class VideoClip:
                 logger.info(f"Trimming template from {template_clip.duration:.1f}s to {audio_duration:.1f}s")
                 template_clip = template_clip.subclipped(0, audio_duration)
             
-            # Skip complex transformations that seem to cause MoviePy issues
-            logger.info("Skipping resize/crop transformations to avoid MoviePy state corruption")
+            # Apply video transformations for proper formatting
+            target_resolution = config.get_target_resolution()
+            current_size = template_clip.size
             
-            # Create final video with minimal processing
-            final_video = template_clip
+            if target_resolution != current_size:
+                logger.info(f"Resizing video from {current_size} to {target_resolution}")
+                # Resize while maintaining aspect ratio and cropping if needed
+                final_video = template_clip.resized(target_resolution)
+            else:
+                final_video = template_clip
             
             # Add audio if available
             if self.audio_clips:
@@ -600,8 +614,14 @@ class VideoClip:
                 final_audio = CompositeAudioClip(self.audio_clips)
                 final_video = final_video.with_audio(final_audio)
             
-            # Skip captions for now to isolate the rendering issue
-            logger.info("Skipping captions to isolate rendering issue")
+            # Add captions if available
+            if self.video_components:
+                logger.info(f"Adding {len(self.video_components)} caption(s)")
+                # Composite video with captions
+                final_video = CompositeVideoClip([final_video] + self.video_components)
+                logger.info("Captions successfully composited")
+            else:
+                logger.info("No captions to add")
             
             # Use minimal render settings to avoid issues
             render_kwargs = {

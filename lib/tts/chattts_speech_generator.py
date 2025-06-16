@@ -55,7 +55,7 @@ class ChatTTSSpeechGenerator:
         self._initialize_chattts()
     
     def _initialize_chattts(self):
-        """Initialize the ChatTTS engine."""
+        """Initialize the ChatTTS engine with quality optimizations."""
         if not HAS_CHATTTS:
             logger.critical("ChatTTS not available. Install with: pip install ChatTTS")
             logger.info("Also requires: pip install torch numpy scipy")
@@ -66,6 +66,11 @@ class ChatTTSSpeechGenerator:
                 logger.info(f"Initializing ChatTTS on device: {self.config.device}")
                 logger.debug(f"Sample rate: {self.config.sample_rate}Hz")
                 
+                # Optimize PyTorch for better quality and performance
+                torch._dynamo.config.cache_size_limit = 64
+                torch._dynamo.config.suppress_errors = True
+                torch.set_float32_matmul_precision('high')
+                
                 # Initialize ChatTTS
                 self.chat = ChatTTS.Chat()
                 
@@ -73,7 +78,7 @@ class ChatTTSSpeechGenerator:
                 logger.info("Loading ChatTTS models (this may take a moment)...")
                 self.chat.load()
                 
-                logger.info("ChatTTS initialized successfully")
+                logger.info("ChatTTS initialized successfully with quality optimizations")
                 
             except Exception as e:
                 logger.critical(f"Failed to initialize ChatTTS: {e}")
@@ -151,10 +156,22 @@ class ChatTTSSpeechGenerator:
                 # Use deterministic seed for each chunk to maintain voice consistency
                 params_infer_code.manual_seed = 42 + i  # Slight variation but consistent pattern
                 
-                print(f"   Using params: temp={params_infer_code.temperature}, top_K={params_infer_code.top_K}, top_P={params_infer_code.top_P}")
+                # Add prosodic enhancement for better quality
+                params_refine_text = self.chat.RefineTextParams()
+                params_refine_text.temperature = self.config.temperature
                 
-                # Generate audio with consistent parameters
-                wavs = self.chat.infer([chunk], params_infer_code=params_infer_code)
+                # Apply quality-enhancing prosodic tokens based on content
+                enhanced_chunk = self._enhance_text_with_prosodic_tokens(chunk, i)
+                
+                print(f"   Using params: temp={params_infer_code.temperature}, top_K={params_infer_code.top_K}, top_P={params_infer_code.top_P}")
+                print(f"   Enhanced text: {enhanced_chunk[:100]}...")
+                
+                # Generate audio with enhanced parameters
+                wavs = self.chat.infer(
+                    [enhanced_chunk], 
+                    params_infer_code=params_infer_code,
+                    params_refine_text=params_refine_text
+                )
                 
                 if wavs and len(wavs) > 0:
                     all_audio.append(wavs[0])
@@ -350,6 +367,49 @@ class ChatTTSSpeechGenerator:
         
         return chunks if chunks else [text]
     
+    def _enhance_text_with_prosodic_tokens(self, text: str, chunk_index: int) -> str:
+        """
+        Enhance text with prosodic control tokens for better speech quality.
+        
+        Args:
+            text: The text chunk to enhance
+            chunk_index: Index of the chunk for variation
+            
+        Returns:
+            Enhanced text with prosodic tokens
+        """
+        import re
+        
+        # Apply different enhancements based on content and position
+        enhanced_text = text
+        
+        # Add natural oral characteristics (varies by chunk for variety)
+        oral_level = min(2 + (chunk_index % 3), 4)  # Varies between 2-4
+        enhanced_text = f"[oral_{oral_level}]" + enhanced_text
+        
+        # Add strategic pauses for better pacing
+        # Add breaks after sentences ending with periods
+        enhanced_text = re.sub(r'\.(\s+)', r'.[break_2]\1', enhanced_text)
+        
+        # Add shorter breaks after commas for natural pacing
+        enhanced_text = re.sub(r',(\s+)', r',[uv_break]\1', enhanced_text)
+        
+        # Add slight pauses before questions for emphasis
+        enhanced_text = re.sub(r'\s+(\w+\?)', r' [uv_break]\1', enhanced_text)
+        
+        # Add very subtle laughter for engaging content (sparingly)
+        if chunk_index == 0 or '!' in text or 'interesting' in text.lower() or 'amazing' in text.lower():
+            # Only add light laughter to first chunk or exciting content
+            enhanced_text = enhanced_text + "[laugh_0]"
+        
+        # Add end-of-chunk pause for natural flow between chunks
+        if not enhanced_text.endswith(('.', '!', '?')):
+            enhanced_text += "[break_3]"
+        else:
+            enhanced_text += "[break_2]"
+        
+        return enhanced_text
+    
     def _fallback_response(self, error_message: str) -> Dict[str, Any]:
         """Fallback response when speech generation fails."""
         print(f"❌ {error_message}")
@@ -385,34 +445,41 @@ class ChatTTSSpeechGenerator:
 
 
 def get_recommended_voice_settings() -> List[Dict[str, Any]]:
-    """Get recommended voice settings for different use cases."""
+    """Get recommended voice settings for different use cases with quality optimizations."""
     return [
         {
             "name": "natural",
-            "description": "Balanced, natural-sounding speech",
-            "temperature": 0.7,
-            "top_k": 20,
+            "description": "Balanced, natural-sounding speech with prosodic enhancement",
+            "temperature": 0.6,  # Slightly lower for better consistency
+            "top_k": 15,         # More focused vocabulary
             "top_p": 0.7
         },
         {
             "name": "expressive", 
-            "description": "More animated and expressive",
-            "temperature": 0.9,
-            "top_k": 30,
+            "description": "More animated and expressive with enhanced prosody",
+            "temperature": 0.8,  # Slightly lower for control
+            "top_k": 25,         # Wider vocabulary for expressiveness
             "top_p": 0.8
         },
         {
             "name": "calm",
-            "description": "Calm, measured delivery",
-            "temperature": 0.5,
-            "top_k": 15,
+            "description": "Calm, measured delivery with subtle prosodic control",
+            "temperature": 0.4,  # Lower for calm delivery
+            "top_k": 12,         # More conservative
             "top_p": 0.6
         },
         {
             "name": "consistent",
-            "description": "Very consistent, predictable speech",
-            "temperature": 0.2,
-            "top_k": 5,
-            "top_p": 0.3
+            "description": "Very consistent, predictable speech with minimal prosody",
+            "temperature": 0.2,  # Very low for maximum consistency
+            "top_k": 8,          # Highly focused
+            "top_p": 0.4         # Conservative sampling
+        },
+        {
+            "name": "high_quality",
+            "description": "Optimized for maximum quality with advanced prosodic control",
+            "temperature": 0.5,  # Balanced for quality
+            "top_k": 12,         # Focused but not restrictive
+            "top_p": 0.6         # Conservative but natural
         }
     ]

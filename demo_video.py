@@ -29,7 +29,7 @@ def main():
     parser.add_argument('--template', help='Path to template video file')
     parser.add_argument('--engine', choices=['chattts', 'coqui'], default='chattts',
                        help='TTS engine to use')
-    parser.add_argument('--voice', choices=['natural', 'expressive', 'calm', 'consistent'],
+    parser.add_argument('--voice', choices=['natural', 'expressive', 'calm', 'consistent', 'high_quality'],
                        default='natural', help='ChatTTS voice style')
     parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny'],
                        default='tacotron2', help='Coqui TTS model')

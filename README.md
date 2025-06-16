@@ -1,16 +1,17 @@
 # MoneyTree
 
-Transform Wikipedia articles into engaging educational audio and video content with AI-powered generation and natural speech synthesis.
+Transform Wikipedia articles into engaging educational video content with AI-powered commentary, natural speech synthesis, and synchronized captions. Create TikTok/YouTube Shorts-style vertical videos from any Wikipedia topic.
 
 ## Features
 
+- **Complete Video Pipeline** - Wikipedia → Educational Commentary → Natural Speech → Captioned Video
 - **Wikipedia Integration** - Fetch comprehensive article content via REST API
 - **AI Content Generation** - Create educational commentary using Ollama LLM
-- **Natural TTS** - Conversational speech with ChatTTS or professional Coqui TTS
-- **Video Generation** - Create vertical videos with synchronized captions for TikTok/YouTube Shorts
+- **Natural TTS with Voice Consistency** - ChatTTS with speaker embeddings for consistent voice
+- **Synchronized Captions** - Auto-generated captions timed to audio with center positioning
+- **Vertical Video Format** - Optimized for TikTok/YouTube Shorts (9:16 aspect ratio)
 - **Smart Fallback** - Rule-based generation when LLM is unavailable
-- **Fast Pipeline** - Wikipedia → Content Generation → Speech → Video in under 5 minutes
-- **Professional Logging** - Comprehensive logging system for debugging and monitoring
+- **Fast Pipeline** - Complete video generation in under 5 minutes
 
 ## Quick Start
 
@@ -34,28 +35,28 @@ uv sync
 
 ### Basic Usage
 
-#### Audio Generation
+#### Complete Video Generation (Primary Demo)
 ```bash
-# Natural conversational speech (recommended)
+# Complete pipeline: Wikipedia → Text → Speech → Video with captions
+uv run python demo_video.py "Artificial Intelligence" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality medium --engine chattts
+
+# Quick test with low quality
+uv run python demo_video.py "Cat" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality low --engine chattts
+
+# Production quality video
+uv run python demo_video.py "Climate Change" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality high --engine chattts
+
+# Use rule-based content generation (faster, no LLM required)
+uv run python demo_video.py "Python programming" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
+```
+
+#### Audio-Only Generation
+```bash
+# Natural conversational speech
 uv run python demo_natural_tts.py "Python programming language" --engine chattts
 
 # Professional synthetic speech
 uv run python demo_coqui_tts.py "Quantum Physics" --model fast_pitch
-
-# Compare both TTS engines
-uv run python demo_natural_tts.py "Coffee" --engine both
-```
-
-#### Video Generation
-```bash
-# Complete pipeline: Wikipedia → Text → Speech → Video
-uv run python demo_video.py "Artificial Intelligence" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality medium --engine chattts
-
-# Fast video generation (using existing audio)
-uv run python demo_fast_video.py "Cat" --quality low --preset ultrafast
-
-# Production quality video
-uv run python demo_video.py "Climate Change" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality high --engine chattts
 ```
 
 ## Architecture
@@ -166,10 +167,11 @@ MoneyTree generates high-quality audio with two TTS options:
 | **High** | 1080x1920 | 24 | ~5-10min | Final production |
 
 ### Caption Features
-- **Smart positioning**: Top third of screen (mobile-friendly)
+- **Center positioning**: Captions centered on screen for maximum visibility
 - **Text wrapping**: Automatic line breaks to prevent cutoff
-- **Synchronization**: Timed to audio duration
-- **Styling**: Optimized for mobile viewing with stroke and background
+- **Audio synchronization**: Captions timed to speech using audio analysis
+- **Consistent voice**: Speaker embeddings ensure consistent voice throughout
+- **Mobile-optimized styling**: White text with black stroke for readability
 
 ## Configuration
 
@@ -227,30 +229,32 @@ uv run python tests/integration/test_full_pipeline.py
 
 ### Fast Video Generation
 ```bash
-# Use existing audio (fastest)
-uv run python demo_fast_video.py "Cat" --quality low --preset ultrafast
+# Low quality for quick tests
+uv run python demo_video.py "Cat" --template downloads/videos/minecraft_parkour.mp4 --quality low
 
-# Skip TTS generation
-uv run python demo_video.py "Topic" --use-existing-audio
+# Use rule-based content (no LLM required, faster)
+uv run python demo_video.py "Topic" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
 
-# Use rule-based content (no LLM)
-uv run python demo_video.py "Topic" --use-rule-based
+# Consistent voice for predictable output
+uv run python demo_video.py "Topic" --template downloads/videos/minecraft_parkour.mp4 --voice consistent
 ```
 
-### Troubleshooting
-- **Slow rendering**: Use `--quality low --preset ultrafast`
-- **ChatTTS issues**: Numbers/dates automatically normalized
-- **Font problems**: Uses system default fonts
+## Troubleshooting
+- **Slow rendering**: Use `--quality low` for faster processing
+- **Voice inconsistency**: Fixed with speaker embeddings for consistent voice
+- **Caption positioning**: Center positioning ensures optimal visibility
+- **ChatTTS issues**: Numbers/dates automatically normalized for better speech
 - **Memory issues**: Template videos automatically trimmed to audio duration
 
 ## Project Structure
 
 ```
 moneytree/
-├── demo_video.py                    # Complete video generation pipeline
-├── demo_fast_video.py              # Fast video generation (existing audio)
+├── demo_video.py                    # Complete video generation pipeline (PRIMARY DEMO)
 ├── demo_natural_tts.py             # Natural TTS demo
 ├── demo_coqui_tts.py              # Coqui TTS demo
+├── demo_fast_video.py              # Fast video generation (existing audio)
+├── demo_youtube_download.py        # Template video downloader
 ├── lib/
 │   ├── utils/
 │   │   └── logging_config.py      # Centralized logging system

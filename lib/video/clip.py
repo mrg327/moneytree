@@ -38,28 +38,28 @@ except ImportError:
 @dataclass
 class CaptionStyle:
     """Configuration for caption appearance and behavior."""
-    font_size: int = 48
+    font_size: int = 36
     font_color: str = 'white'
     bg_color: str = 'black'
     bg_opacity: float = 0.7
-    position: str = 'bottom'  # 'top', 'center', 'bottom'
+    position: str = 'center'  # 'top', 'center', 'bottom'
     max_width: int = 80  # Percentage of video width
-    words_per_caption: int = 8
+    words_per_caption: int = 6
     font_family: str = None  # Use system default font instead of Arial
     stroke_color: str = 'black'
     stroke_width: int = 2
     
     @classmethod
-    def for_vertical_video(cls, font_size: int = 48) -> 'CaptionStyle':
+    def for_vertical_video(cls, font_size: int = 36) -> 'CaptionStyle':
         """Create caption style optimized for vertical videos (TikTok/YT Shorts)."""
         return cls(
             font_size=font_size,
             font_color='white',
             bg_color='black',
             bg_opacity=0.8,
-            position='top',  # Position in top third with proper spacing
-            max_width=80,  # More conservative width to prevent cutoff
-            words_per_caption=5,  # Fewer words per caption for better readability
+            position='center',  # Center positioning for better visibility
+            max_width=85,  # Slightly wider for center positioning
+            words_per_caption=6,  # Slightly more words since center has more space
             font_family=None,
             stroke_color='black',
             stroke_width=2  # Clean stroke for readability
@@ -388,18 +388,29 @@ class VideoClip:
         for caption_info in timing_data:
             try:
                 # Calculate position for better placement
-                # Use tuple format (x, y) where y is positioned from TOP of text, not center
+                # MoviePy positioning: (x, y) where y is from TOP of video frame
                 if style.position == 'bottom':
-                    position = ('center', 0.85)  # 85% down from top
+                    position = ('center', 0.75)  # 75% down from top, higher up to avoid cutoff
                 elif style.position == 'top':
-                    position = ('center', 0.22)  # 22% down from top, accounting for text height
-                else:  # center
-                    position = 'center'
+                    position = ('center', 0.25)  # 25% down from top, lower to avoid cutoff
+                elif style.position == 'center':
+                    # Use explicit center positioning - 0.45 to account for text height
+                    position = ('center', 0.45)  # Slightly above true center for better visual balance
+                else:
+                    # Default fallback to center
+                    position = ('center', 0.45)
+                
+                logger.debug(f"Caption position for '{style.position}': {position}")
                 
                 # Wrap text to prevent cutoff with better logic
                 text = caption_info['text']
-                # Conservative character limits for vertical 540px width
-                max_chars_per_line = 18 if style.position == 'top' else 22
+                # Character limits based on position and screen size
+                if style.position == 'center':
+                    max_chars_per_line = 25  # Center has more flexibility
+                elif style.position == 'top':
+                    max_chars_per_line = 20  # Top needs more conservative spacing
+                else:  # bottom
+                    max_chars_per_line = 22  # Bottom positioning
                 
                 # Only wrap if text is longer than limit
                 if len(text) > max_chars_per_line:

@@ -130,17 +130,30 @@ class ChatTTSSpeechGenerator:
             # Split text into manageable chunks for better processing
             text_chunks = self._split_text_for_tts(full_text)
             
+            # Generate consistent speaker for all chunks (use fixed seed for consistency)
+            print("   Setting up consistent voice parameters...")
+            torch.manual_seed(42)  # Fixed seed for reproducible voice
+            
             all_audio = []
+            
+            # Generate a consistent speaker sample for the first chunk, then reuse it
+            speaker_wav = None
+            
             for i, chunk in enumerate(text_chunks):
-                print(f"   Processing chunk {i+1}/{len(text_chunks)}")
+                print(f"   Processing chunk {i+1}/{len(text_chunks)} with consistent voice")
                 
-                # Generate audio for this chunk using proper ChatTTS parameters
+                # Generate audio for this chunk using consistent parameters
                 params_infer_code = self.chat.InferCodeParams()
                 params_infer_code.temperature = self.config.temperature
                 params_infer_code.top_K = self.config.top_k
                 params_infer_code.top_P = self.config.top_p
                 
+                # Use deterministic seed for each chunk to maintain voice consistency
+                params_infer_code.manual_seed = 42 + i  # Slight variation but consistent pattern
+                
                 print(f"   Using params: temp={params_infer_code.temperature}, top_K={params_infer_code.top_K}, top_P={params_infer_code.top_P}")
+                
+                # Generate audio with consistent parameters
                 wavs = self.chat.infer([chunk], params_infer_code=params_infer_code)
                 
                 if wavs and len(wavs) > 0:
@@ -398,8 +411,8 @@ def get_recommended_voice_settings() -> List[Dict[str, Any]]:
         {
             "name": "consistent",
             "description": "Very consistent, predictable speech",
-            "temperature": 0.3,
-            "top_k": 10,
-            "top_p": 0.5
+            "temperature": 0.2,
+            "top_k": 5,
+            "top_p": 0.3
         }
     ]

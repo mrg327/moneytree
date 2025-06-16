@@ -181,7 +181,7 @@ def main():
             with VideoClip(str(template_path)) as video_clip:
                 # Configure caption style based on format
                 if args.format == 'vertical':
-                    caption_style = CaptionStyle.for_vertical_video(font_size=72)
+                    caption_style = CaptionStyle.for_vertical_video(font_size=36)
                     logger.debug(f"Using vertical caption style: {caption_style.words_per_caption} words per line")
                 else:
                     caption_style = CaptionStyle.for_horizontal_video(font_size=56)

@@ -1,0 +1,27 @@
+[project]
+name = "moneytree"
+version = "0.1.0"
+description = "Transform Wikipedia articles into engaging educational audio content with AI-powered humor and natural speech synthesis"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "requests>=2.31.0",
+    "ollama>=0.3.0",
+    "tts>=0.22.0",
+    "chattts",
+    "torch",
+    "numpy",
+    "scipy",
+    "pytest>=8.4.0",
+    "moviepy>=2.2.1",
+    "librosa>=0.11.0",
+    "pillow>=11.2.1",
+    "yt-dlp>=2025.6.9",
+    "opencv-python>=4.11.0.86",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+]

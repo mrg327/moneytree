@@ -409,16 +409,12 @@ class VideoClip:
         
         for caption_info in timing_data:
             try:
-                # Calculate position for text placement using pixel coordinates
-                if style.position == 'bottom':
-                    position = ('center', int(height * 0.75))  # 75% down from top
-                elif style.position == 'top':
-                    position = ('center', int(height * 0.25))  # 25% down from top
-                else:  # center
-                    position = ('center', int(height * 0.45))  # Slightly above center
+                # First wrap text based on available width (80% of video width)
+                max_text_width = int(width * 0.8)  # Leave 20% for margins
+                text = self._wrap_text_for_display_pixel_based(caption_info['text'], style, max_text_width)
                 
-                # Wrap text for better display
-                text = self._wrap_text_for_display(caption_info['text'], style)
+                # Calculate safe position with bounds checking
+                position = self._calculate_safe_position(text, style, width, height)
                 
                 # Create text clip with enhanced styling
                 txt_clip = self._create_styled_text_clip(
@@ -440,6 +436,103 @@ class VideoClip:
         return caption_clips
     
     
+    def _measure_text_dimensions(self, text: str, style: CaptionStyle) -> tuple:
+        """Measure actual pixel dimensions of rendered text using PIL."""
+        try:
+            # Create a dummy image to measure text
+            dummy_img = Image.new('RGB', (1, 1))
+            draw = ImageDraw.Draw(dummy_img)
+            
+            # Load font - use default if none specified
+            if style.font_family:
+                try:
+                    font = ImageFont.truetype(style.font_family, style.font_size)
+                except:
+                    font = ImageFont.load_default()
+            else:
+                font = ImageFont.load_default()
+            
+            # Get bounding box of the text
+            bbox = draw.textbbox((0, 0), text, font=font)
+            width = bbox[2] - bbox[0]
+            height = bbox[3] - bbox[1]
+            
+            # Add stroke width to dimensions if present
+            if style.stroke_width > 0:
+                width += style.stroke_width * 2
+                height += style.stroke_width * 2
+                
+            return (width, height)
+            
+        except Exception as e:
+            logger.warning(f"Text measurement failed, using fallback: {e}")
+            # Fallback: rough estimation
+            lines = text.count('\n') + 1
+            chars_per_line = max(len(line) for line in text.split('\n'))
+            return (chars_per_line * style.font_size * 0.6, lines * style.font_size * 1.2)
+
+    def _wrap_text_for_display_pixel_based(self, text: str, style: CaptionStyle, max_width: int) -> str:
+        """Wrap text based on actual pixel width instead of character count."""
+        words = text.split()
+        lines = []
+        current_line = ""
+        
+        for word in words:
+            test_line = current_line + (" " if current_line else "") + word
+            text_width, _ = self._measure_text_dimensions(test_line, style)
+            
+            if text_width <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                    current_line = word
+                else:
+                    # Single word too long, truncate
+                    while self._measure_text_dimensions(word + "...", style)[0] > max_width and len(word) > 3:
+                        word = word[:-1]
+                    current_line = word + "..."
+        
+        if current_line:
+            lines.append(current_line)
+        
+        return '\n'.join(lines[:2])  # Still limit to 2 lines
+
+    def _calculate_safe_position(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
+        """Calculate text position with margins to prevent clipping."""
+        
+        # Measure actual text dimensions
+        text_width, text_height = self._measure_text_dimensions(text, style)
+        
+        # Define margins (10% of video dimensions)
+        margin_x = int(video_width * 0.1)
+        margin_y = int(video_height * 0.1)
+        
+        # Calculate safe boundaries
+        safe_left = margin_x
+        safe_right = video_width - margin_x
+        safe_top = margin_y  
+        safe_bottom = video_height - margin_y
+        
+        # Calculate position based on style, but within safe boundaries
+        if style.position == 'bottom':
+            # Position text so bottom edge is at safe_bottom
+            y_pos = safe_bottom - text_height
+        elif style.position == 'top':
+            # Position text so top edge is at safe_top
+            y_pos = safe_top
+        else:  # center
+            # Center vertically within safe area
+            y_pos = (safe_top + safe_bottom - text_height) // 2
+        
+        # Ensure text doesn't go outside safe boundaries
+        y_pos = max(safe_top, min(y_pos, safe_bottom - text_height))
+        
+        # X position - always center horizontally
+        x_pos = 'center'
+        
+        return (x_pos, y_pos)
+
     def _wrap_text_for_display(self, text: str, style: CaptionStyle) -> str:
         """Wrap text appropriately for video display."""
         # Character limits based on position and screen size

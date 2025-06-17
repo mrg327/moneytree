@@ -119,13 +119,14 @@ class CoquiSpeechGenerator:
             # Check if file was created and get stats
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
-                duration_estimate = len(full_text.split()) / (180 / 60)  # Estimate based on word count
+                # Get actual audio duration instead of estimate
+                actual_duration = self._get_actual_audio_duration(str(output_path))
                 
                 return {
                     "success": True,
                     "output_path": str(output_path),
                     "file_size": file_size,
-                    "estimated_duration": duration_estimate,
+                    "estimated_duration": actual_duration,
                     "text_word_count": len(full_text.split()),
                     "tts_config": {
                         "model": self.config.model_name,
@@ -140,6 +141,54 @@ class CoquiSpeechGenerator:
                 
         except Exception as e:
             return self._fallback_response(f"Coqui TTS generation failed: {e}")
+    
+    def _get_actual_audio_duration(self, audio_path: str) -> float:
+        """
+        Get the actual duration of the generated audio file.
+        
+        Args:
+            audio_path: Path to the audio file
+            
+        Returns:
+            Duration in seconds
+        """
+        try:
+            # Try using librosa first (more accurate)
+            try:
+                import librosa
+                y, sr = librosa.load(audio_path)
+                duration = len(y) / sr
+                print(f"🎵 Actual audio duration: {duration:.2f}s (measured with librosa)")
+                return duration
+            except ImportError:
+                # Fallback to basic audio analysis
+                pass
+            
+            # Try using wave module for WAV files
+            if audio_path.lower().endswith('.wav'):
+                import wave
+                with wave.open(audio_path, 'rb') as wav_file:
+                    frames = wav_file.getnframes()
+                    sample_rate = wav_file.getframerate()
+                    duration = frames / sample_rate
+                    print(f"🎵 Actual audio duration: {duration:.2f}s (measured with wave)")
+                    return duration
+            
+            # Try using MoviePy as final fallback
+            try:
+                from moviepy import AudioFileClip
+                with AudioFileClip(audio_path) as audio_clip:
+                    duration = audio_clip.duration
+                    print(f"🎵 Actual audio duration: {duration:.2f}s (measured with MoviePy)")
+                    return duration
+            except ImportError:
+                pass
+                
+        except Exception as e:
+            print(f"⚠️ Could not measure audio duration: {e}, using word-based estimate")
+            
+        # Fallback to word-based estimate if all else fails
+        return len(self._extract_text_from_script([{'content': 'temp'}]).split()) / (180 / 60)
     
     def _extract_text_from_script(self, script: List[Any]) -> str:
         """Extract clean text from script turns (handles both dict and DiscussionTurn objects)."""
@@ -162,6 +211,14 @@ class CoquiSpeechGenerator:
                 # Remove any markup that might interfere
                 content = content.replace('*', '')
                 content = content.replace('_', '')
+                # Remove multiple spaces and normalize whitespace
+                content = ' '.join(content.split())
+                # Remove problematic characters that can cause TTS issues
+                content = content.replace('|', '')
+                content = content.replace('{', '')
+                content = content.replace('}', '')
+                content = content.replace('[', '')
+                content = content.replace(']', '')
                 
                 # Add natural pauses at sentence boundaries
                 if not content.endswith(('.', '!', '?')):

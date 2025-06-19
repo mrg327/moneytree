@@ -49,6 +49,11 @@ class CaptionStyle:
     stroke_color: str = 'black'
     stroke_width: int = 2
     
+    # Renderer configuration
+    preferred_renderer: str = 'auto'  # 'auto', 'moviepy', 'opencv_pil'
+    enable_fallback: bool = True  # Enable automatic fallback between renderers
+    quality_priority: bool = False  # Prioritize quality over speed
+    
     @classmethod
     def for_vertical_video(cls, font_size: int = 36) -> 'CaptionStyle':
         """Create caption style optimized for vertical videos (TikTok/YT Shorts)."""
@@ -110,6 +115,15 @@ class VideoConfig:
     vertical_format: bool = True  # True for TikTok/YT Shorts (9:16), False for standard (16:9)
     preset: str = 'medium'  # x264 preset: ultrafast, superfast, veryfast, faster, fast, medium, slow
     threads: int = 0  # 0 = auto-detect CPU cores
+    
+    # Quality validation configuration
+    enable_quality_validation: bool = False  # Enable automatic quality validation
+    quality_threshold: float = 0.8  # Minimum acceptable quality score (0.0-1.0)
+    validation_sample_count: int = 10  # Number of frames to sample for validation
+    
+    # Debug and logging options
+    debug_caption_rendering: bool = False  # Enable detailed caption rendering logs
+    save_debug_frames: bool = False  # Save frame snapshots for debugging
     
     def get_target_resolution(self) -> Tuple[int, int]:
         """Get the target resolution based on format preference."""
@@ -522,6 +536,47 @@ class VideoClip:
         descender_chars = set('gjpqy')
         return sum(1 for char in text.lower() if char in descender_chars)
     
+    def _validate_and_score_font(self, font_path: str, style: CaptionStyle) -> tuple:
+        """Validate font and assign quality score."""
+        try:
+            font = ImageFont.truetype(font_path, style.font_size)
+            
+            # Test font with sample text including descenders
+            test_text = "Testing gjpqy"
+            dummy_img = Image.new('RGB', (100, 100))
+            draw = ImageDraw.Draw(dummy_img)
+            
+            # Try to measure text to ensure font works properly
+            bbox = draw.textbbox((0, 0), test_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # Calculate quality score based on various factors
+            score = 100
+            
+            # Prefer full system paths (higher reliability)
+            if font_path.startswith('/'):
+                score += 20
+            
+            # Prefer bold fonts for better readability
+            if 'bold' in font_path.lower() or 'Bold' in font_path:
+                score += 15
+            
+            # Prefer commonly available fonts
+            if any(name in font_path.lower() for name in ['dejavu', 'liberation', 'noto', 'arial']):
+                score += 10
+            
+            # Ensure reasonable text dimensions
+            if text_width > 20 and text_height > 10:
+                score += 10
+            
+            logger.debug(f"Font validation: {font_path} scored {score}")
+            return (font, score)
+            
+        except Exception as e:
+            logger.debug(f"Font validation failed for {font_path}: {e}")
+            return (None, 0)
+
     def _get_consistent_font(self, style: CaptionStyle):
         """Get a consistent font object with proper caching and fallback handling."""
         if not hasattr(self, '_font_cache'):
@@ -543,16 +598,30 @@ class VideoClip:
             except Exception as e:
                 logger.warning(f"Failed to load font '{style.font_family}': {e}")
         
-        # Try standard system fonts as fallback
+        # Try system fonts with WSL2-optimized fallback paths
         if font is None:
+            # WSL2-optimized font paths with full system paths
             fallback_fonts = [
-                # Common bold sans-serif fonts
+                # WSL2 specific paths - Linux system fonts
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                
+                # WSL2 access to Windows fonts
+                "/mnt/c/Windows/Fonts/arial.ttf",
+                "/mnt/c/Windows/Fonts/arialbd.ttf",
+                "/mnt/c/Windows/Fonts/calibri.ttf",
+                "/mnt/c/Windows/Fonts/calibrib.ttf",
+                
+                # Font name fallbacks (for direct font name resolution)
                 "DejaVuSans-Bold.ttf",
                 "LiberationSans-Bold.ttf", 
                 "NotoSans-Bold.ttf",
                 "Arial-Bold.ttf",
                 "arial-bold.ttf",
-                # Standard fallbacks
                 "DejaVuSans.ttf",
                 "Arial.ttf",
                 "arial.ttf",
@@ -560,13 +629,20 @@ class VideoClip:
                 "NotoSans-Regular.ttf"
             ]
             
+            # Use font validation and scoring to select best available font
+            best_font = None
+            best_score = 0
+            
             for fallback_font in fallback_fonts:
-                try:
-                    font = ImageFont.truetype(fallback_font, style.font_size)
-                    logger.debug(f"Using fallback font: {fallback_font} at size {style.font_size}")
-                    break
-                except:
-                    continue
+                font_candidate, score = self._validate_and_score_font(fallback_font, style)
+                if font_candidate and score > best_score:
+                    best_font = font_candidate
+                    best_score = score
+                    logger.debug(f"New best font: {fallback_font} with score {score}")
+            
+            if best_font:
+                font = best_font
+                logger.info(f"Selected best available font with score {best_score}")
         
         # Final fallback to PIL default
         if font is None:
@@ -815,6 +891,14 @@ class VideoClip:
         # Measure actual text dimensions (now includes descender space)
         text_width, text_height = self._measure_text_dimensions_with_descenders(text, style)
         
+        # Calculate the margins that will be added to the TextClip
+        margins = self._calculate_dynamic_margins(style)
+        margin_h, margin_v = margins
+        
+        # Adjust text dimensions to account for the margins that will be added
+        effective_text_width = text_width + (margin_h * 2)
+        effective_text_height = text_height + (margin_v * 2)
+        
         # Calculate extra descender clearance based on font size
         descender_clearance = max(8, int(style.font_size * 0.25))  # 25% of font size or 8px minimum
         
@@ -832,35 +916,36 @@ class VideoClip:
         base_safety_padding = 35  # Increased base padding
         descender_safety_padding = base_safety_padding + descender_clearance
         
-        # Calculate position based on style, but within safe boundaries
+        # Calculate position based on style, but within safe boundaries, using effective dimensions
         if style.position == 'bottom':
-            # Position text so bottom edge (including descenders) is well within safe area
-            y_pos = safe_bottom - text_height - descender_safety_padding
-            logger.debug(f"Bottom positioning: safe_bottom={safe_bottom}, text_height={text_height}, padding={descender_safety_padding} → y_pos={y_pos}")
+            # Position text so bottom edge (including margins and descenders) is well within safe area
+            y_pos = safe_bottom - effective_text_height - descender_safety_padding
+            logger.debug(f"Bottom positioning: safe_bottom={safe_bottom}, effective_height={effective_text_height}, padding={descender_safety_padding} → y_pos={y_pos}")
         elif style.position == 'top':
             # Position text so top edge is at safe_top with extra padding  
             y_pos = safe_top + base_safety_padding
             logger.debug(f"Top positioning: safe_top={safe_top}, padding={base_safety_padding} → y_pos={y_pos}")
         else:  # center
-            # Center vertically within safe area, accounting for descender space
+            # Center vertically within safe area, accounting for effective dimensions
             available_height = safe_bottom - safe_top - (2 * base_safety_padding)
-            y_pos = safe_top + base_safety_padding + (available_height - text_height) // 2
-            logger.debug(f"Center positioning: available_height={available_height} → y_pos={y_pos}")
+            y_pos = safe_top + base_safety_padding + (available_height - effective_text_height) // 2
+            logger.debug(f"Center positioning: available_height={available_height}, effective_height={effective_text_height} → y_pos={y_pos}")
         
-        # Ensure text doesn't go outside safe boundaries with additional checks
+        # Ensure text doesn't go outside safe boundaries with additional checks using effective dimensions
         min_y = safe_top + base_safety_padding
-        max_y = safe_bottom - text_height - descender_safety_padding
+        max_y = safe_bottom - effective_text_height - descender_safety_padding
         y_pos = max(min_y, min(y_pos, max_y))
         
-        # Additional validation - ensure we don't go beyond video boundaries
-        absolute_min_y = 10  # Never position text in top 10 pixels
-        absolute_max_y = video_height - text_height - 10  # Never let descenders go beyond bottom 10 pixels
+        # Additional validation - ensure we don't go beyond video boundaries with margin considerations
+        absolute_min_y = margin_v  # Account for top margin
+        absolute_max_y = video_height - effective_text_height - margin_v  # Account for bottom margin
         y_pos = max(absolute_min_y, min(y_pos, absolute_max_y))
         
         # X position - always center horizontally
         x_pos = 'center'
         
-        logger.debug(f"Final position for '{text[:30]}...': ({x_pos}, {y_pos}) with text_height={text_height}")
+        logger.debug(f"Margin-aware positioning for '{text[:30]}...': ({x_pos}, {y_pos})")
+        logger.debug(f"Text dimensions: {text_width}x{text_height}, Margins: {margin_h}x{margin_v}, Effective: {effective_text_width}x{effective_text_height}")
         return (x_pos, y_pos)
 
     def _calculate_safe_position(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
@@ -972,6 +1057,24 @@ class VideoClip:
             logger.warning(f"Background analysis failed, using default: {e}")
             return ('black', 0.7)  # Safe default
 
+    def _calculate_dynamic_margins(self, style: CaptionStyle) -> tuple:
+        """Calculate dynamic margins for TextClip based on stroke and font size."""
+        # Stroke margin - ensure stroke doesn't get cut off
+        stroke_margin = style.stroke_width * 2
+        
+        # Descender margin - 25% of font size for descender safety
+        descender_margin = max(8, int(style.font_size * 0.25))
+        
+        # Safety margin - minimum padding for overall safety
+        safety_margin = 10
+        
+        # Total margin calculation
+        total_margin = stroke_margin + descender_margin + safety_margin
+        
+        logger.debug(f"Dynamic margins: stroke={stroke_margin}, descender={descender_margin}, safety={safety_margin}, total={total_margin}")
+        
+        return (total_margin, total_margin)
+
     def _create_styled_text_clip(
         self, 
         text: str, 
@@ -1006,13 +1109,17 @@ class VideoClip:
                     stroke_width=style.stroke_width
                 )
             
-            # Create text clip with full styling options
+            # Calculate dynamic margins for proper text rendering
+            margins = self._calculate_dynamic_margins(adapted_style)
+            
+            # Create text clip with full styling options including margins
             clip_kwargs = {
                 'text': text,
                 'font_size': adapted_style.font_size,
                 'color': adapted_style.font_color,
                 'stroke_color': adapted_style.stroke_color,
-                'stroke_width': adapted_style.stroke_width
+                'stroke_width': adapted_style.stroke_width,
+                'margin': margins  # Key fix for text cutoff issues
             }
             
             # Only add font if specified
@@ -1024,12 +1131,14 @@ class VideoClip:
             
         except Exception as clip_error:
             logger.warning(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
-            # Fallback to minimal TextClip creation
+            # Fallback to minimal TextClip creation with margins
             try:
+                margins = self._calculate_dynamic_margins(style)
                 txt_clip = TextClip(
                     text=text,
                     font_size=style.font_size,
-                    color=style.font_color
+                    color=style.font_color,
+                    margin=margins  # Include margins even in fallback
                 ).with_position(position).with_start(start_time).with_duration(duration)
                 return txt_clip
             except Exception as fallback_error:
@@ -1325,6 +1434,154 @@ class VideoClip:
             return {
                 "success": False,
                 "error": str(e)
+            }
+    
+    def render_with_dual_system(self,
+                               caption_text: str,
+                               audio_path: str,
+                               output_path: Optional[str] = None,
+                               caption_style: Optional[CaptionStyle] = None,
+                               video_config: Optional[VideoConfig] = None) -> Dict[str, Any]:
+        """
+        Render video using the intelligent dual renderer system.
+        
+        Args:
+            caption_text: Text content for captions
+            audio_path: Path to audio file for synchronization
+            output_path: Output video path (auto-generated if None)
+            caption_style: Caption styling options
+            video_config: Video output configuration
+            
+        Returns:
+            Dictionary with rendering results and quality metrics
+        """
+        if caption_style is None:
+            caption_style = self.caption_style
+        if video_config is None:
+            video_config = self.video_config
+        
+        try:
+            # Import dual renderer system
+            try:
+                from lib.video.caption_manager import caption_manager, RendererType
+                from lib.video.caption_validator import caption_validator
+                HAS_DUAL_SYSTEM = True
+            except ImportError:
+                logger.warning("Dual renderer system not available, falling back to standard MoviePy")
+                HAS_DUAL_SYSTEM = False
+            
+            if not HAS_DUAL_SYSTEM:
+                # Fallback to standard rendering
+                self.add_synchronized_captions(caption_text, audio_path, caption_style)
+                self.add_narration_audio(audio_path)
+                return self.render_video(output_path, video_config)
+            
+            # Generate output path if not provided
+            if not output_path:
+                import time
+                timestamp = int(time.time())
+                output_path = self.output_dir / f"moneytree_dual_{timestamp}.{video_config.output_format}"
+            
+            logger.info("Using intelligent dual renderer system")
+            
+            # Configure caption manager based on style preferences
+            if caption_style.preferred_renderer != 'auto':
+                if caption_style.preferred_renderer == 'moviepy':
+                    caption_manager.set_preferred_renderer(RendererType.MOVIEPY)
+                elif caption_style.preferred_renderer == 'opencv_pil':
+                    caption_manager.set_preferred_renderer(RendererType.OPENCV_PIL)
+            
+            # Attempt rendering with dual system
+            render_result = caption_manager.render_captions(
+                template_video_path=str(self.template_path),
+                audio_path=audio_path,
+                caption_text=caption_text,
+                output_path=str(output_path),
+                caption_style=caption_style,
+                video_config=video_config,
+                quality_priority=caption_style.quality_priority
+            )
+            
+            result = {
+                "success": render_result.success,
+                "output_path": render_result.output_path,
+                "renderer_used": render_result.renderer_used.value if render_result.renderer_used else "unknown",
+                "render_time": render_result.render_time,
+                "dual_system": True
+            }
+            
+            if render_result.error_message:
+                result["error"] = render_result.error_message
+            
+            # Perform quality validation if enabled and rendering succeeded
+            if (render_result.success and video_config.enable_quality_validation and 
+                render_result.output_path):
+                
+                logger.info("Performing quality validation...")
+                
+                try:
+                    # Create caption timing data for validation
+                    words = caption_text.split()
+                    words_per_caption = caption_style.words_per_caption
+                    caption_duration = 3.0
+                    
+                    validation_captions = []
+                    current_time = 0.0
+                    
+                    for i in range(0, len(words), words_per_caption):
+                        caption_words = words[i:i + words_per_caption]
+                        validation_captions.append({
+                            'text': ' '.join(caption_words),
+                            'start': current_time,
+                            'end': current_time + caption_duration,
+                            'duration': caption_duration
+                        })
+                        current_time += caption_duration
+                    
+                    # Run validation
+                    if video_config.validation_sample_count <= 5:
+                        # Quick validation for small sample counts
+                        validation_result = caption_validator.quick_validation(
+                            render_result.output_path, video_config.validation_sample_count
+                        )
+                        result["quality_validation"] = validation_result
+                    else:
+                        # Full validation
+                        quality_metrics = caption_validator.validate_video_captions(
+                            render_result.output_path, validation_captions
+                        )
+                        
+                        result["quality_metrics"] = {
+                            "overall_score": quality_metrics.overall_score,
+                            "text_accuracy": quality_metrics.text_accuracy,
+                            "positioning_accuracy": quality_metrics.positioning_accuracy,
+                            "visual_quality": quality_metrics.visual_quality,
+                            "timing_accuracy": quality_metrics.timing_accuracy,
+                            "issues_found": quality_metrics.issues_found
+                        }
+                        
+                        # Check if quality meets threshold
+                        if quality_metrics.overall_score < video_config.quality_threshold:
+                            logger.warning(f"Quality score {quality_metrics.overall_score:.3f} below threshold {video_config.quality_threshold}")
+                            result["quality_warning"] = True
+                        else:
+                            logger.info(f"Quality validation passed: {quality_metrics.overall_score:.3f}")
+                
+                except Exception as validation_error:
+                    logger.warning(f"Quality validation failed: {validation_error}")
+                    result["quality_validation_error"] = str(validation_error)
+            
+            # Get renderer performance status
+            result["renderer_status"] = caption_manager.get_renderer_status()
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"Dual system rendering failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "dual_system": False
             }
     
     def cleanup(self):

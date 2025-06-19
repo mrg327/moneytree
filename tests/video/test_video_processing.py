@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import pytest
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 from lib.video.clip import VideoClip, CaptionStyle, VideoConfig, create_sample_template
 
 
@@ -275,6 +276,218 @@ class TestVideoProcessing:
             print(f"❌ Memory cleanup test failed: {e}")
             return False
 
+    def test_dual_renderer_configuration(self):
+        """Test dual renderer system configuration."""
+        try:
+            # Test enhanced CaptionStyle with renderer preferences
+            style = CaptionStyle(
+                preferred_renderer='opencv_pil',
+                enable_fallback=True,
+                quality_priority=True,
+                font_size=40,
+                stroke_width=3
+            )
+            
+            assert style.preferred_renderer == 'opencv_pil'
+            assert style.enable_fallback == True
+            assert style.quality_priority == True
+            
+            print(f"✅ Dual renderer caption style: {style.preferred_renderer} with fallback={style.enable_fallback}")
+            
+            # Test enhanced VideoConfig with quality validation
+            config = VideoConfig(
+                enable_quality_validation=True,
+                quality_threshold=0.8,
+                validation_sample_count=10,
+                debug_caption_rendering=True
+            )
+            
+            assert config.enable_quality_validation == True
+            assert config.quality_threshold == 0.8
+            assert config.validation_sample_count == 10
+            
+            print(f"✅ Quality validation config: threshold={config.quality_threshold}, samples={config.validation_sample_count}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Dual renderer configuration test failed: {e}")
+            return False
+
+    def test_margin_system(self):
+        """Test enhanced margin system for text cutoff prevention."""
+        if not Path(self.test_template_path).exists():
+            print("⚠️ Skipping margin system test (no template)")
+            return False
+            
+        try:
+            with VideoClip(self.test_template_path) as video_clip:
+                # Test margin calculation
+                style = CaptionStyle(font_size=36, stroke_width=2)
+                margins = video_clip._calculate_dynamic_margins(style)
+                
+                assert isinstance(margins, tuple)
+                assert len(margins) == 2
+                assert margins[0] > 0 and margins[1] > 0
+                
+                # Margins should account for stroke and descenders
+                expected_minimum = style.stroke_width * 2 + 8 + 10  # stroke + descender + safety
+                assert margins[0] >= expected_minimum
+                
+                print(f"✅ Margin calculation: {margins[0]}x{margins[1]} (minimum expected: {expected_minimum})")
+                
+                # Test text measurement with descenders
+                test_text = "Testing descenders: g, j, p, q, y"
+                dimensions = video_clip._measure_text_dimensions_with_descenders(test_text, style)
+                
+                assert isinstance(dimensions, tuple)
+                assert dimensions[0] > 0 and dimensions[1] > 0
+                
+                print(f"✅ Text measurement with descenders: {dimensions[0]}x{dimensions[1]}")
+                
+                return True
+                
+        except Exception as e:
+            print(f"❌ Margin system test failed: {e}")
+            return False
+
+    def test_font_validation_system(self):
+        """Test WSL2-optimized font validation system."""
+        if not Path(self.test_template_path).exists():
+            print("⚠️ Skipping font validation test (no template)")
+            return False
+            
+        try:
+            with VideoClip(self.test_template_path) as video_clip:
+                style = CaptionStyle(font_size=36)
+                
+                # Test font validation
+                test_fonts = [
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Common Linux font
+                    "/mnt/c/Windows/Fonts/arial.ttf",  # WSL2 Windows access
+                    "nonexistent_font.ttf"  # Should fail gracefully
+                ]
+                
+                valid_fonts = 0
+                for font_path in test_fonts:
+                    font, score = video_clip._validate_and_score_font(font_path, style)
+                    if font is not None:
+                        valid_fonts += 1
+                        print(f"  ✅ Valid font: {font_path} (score: {score})")
+                    else:
+                        print(f"  ❌ Invalid font: {font_path}")
+                
+                assert valid_fonts > 0, "At least one font should be valid"
+                
+                print(f"✅ Font validation: {valid_fonts}/{len(test_fonts)} fonts valid")
+                
+                return True
+                
+        except Exception as e:
+            print(f"❌ Font validation test failed: {e}")
+            return False
+
+    def test_dual_renderer_fallback(self):
+        """Test dual renderer system with fallback behavior."""
+        try:
+            # Import dual renderer components
+            try:
+                from lib.video.caption_manager import CaptionRenderingManager, RendererType
+                from lib.video.caption_validator import CaptionQualityValidator
+                
+                # Test caption manager initialization
+                manager = CaptionRenderingManager(
+                    preferred_renderer=RendererType.AUTO,
+                    enable_fallback=True
+                )
+                
+                # Test renderer detection
+                available_renderers = manager._get_available_renderers()
+                print(f"✅ Available renderers: {[r.value for r in available_renderers]}")
+                
+                # Test renderer selection
+                if available_renderers:
+                    selected = manager._select_optimal_renderer(task_complexity="medium")
+                    print(f"✅ Selected renderer: {selected.value}")
+                    
+                    # Test performance tracking
+                    status = manager.get_renderer_status()
+                    print(f"✅ Renderer status tracking: {len(status)} renderers monitored")
+                
+                # Test quality validator
+                validator = CaptionQualityValidator()
+                print(f"✅ Quality validator initialized (OCR available: {validator.ocr_available})")
+                
+                return True
+                
+            except ImportError as e:
+                print(f"⚠️ Dual renderer system not available: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Dual renderer fallback test failed: {e}")
+            return False
+
+    def test_integrated_dual_rendering(self):
+        """Test integrated dual rendering system."""
+        if not Path(self.test_template_path).exists() or not Path(self.audio_test_path).exists():
+            print("⚠️ Skipping integrated rendering test (missing files)")
+            return False
+            
+        try:
+            # Test with dual system configuration
+            style = CaptionStyle(
+                preferred_renderer='auto',
+                enable_fallback=True,
+                quality_priority=False,  # Prefer speed for testing
+                font_size=36,
+                position='bottom'
+            )
+            
+            config = VideoConfig(
+                enable_quality_validation=False,  # Disable for faster testing
+                quality='low',  # Fast rendering for testing
+                debug_caption_rendering=True
+            )
+            
+            with VideoClip(self.test_template_path) as video_clip:
+                # Mock the dual system to avoid actual video processing
+                with patch('lib.video.caption_manager.caption_manager') as mock_manager:
+                    # Mock successful rendering result
+                    mock_result = Mock()
+                    mock_result.success = True
+                    mock_result.render_time = 2.5
+                    mock_result.output_path = str(self.output_dir / "test_dual_output.mp4")
+                    mock_result.renderer_used.value = 'moviepy'
+                    mock_result.error_message = None
+                    
+                    mock_manager.render_captions.return_value = mock_result
+                    mock_manager.get_renderer_status.return_value = {
+                        'moviepy': {'status': 'available', 'success_rate': 0.95},
+                        'opencv_pil': {'status': 'available', 'success_rate': 0.90}
+                    }
+                    
+                    # Test dual system rendering
+                    result = video_clip.render_with_dual_system(
+                        caption_text=self.test_caption_text,
+                        audio_path=self.audio_test_path,
+                        caption_style=style,
+                        video_config=config
+                    )
+                    
+                    assert result['success'] == True
+                    assert result['dual_system'] == True
+                    assert 'renderer_used' in result
+                    assert 'render_time' in result
+                    
+                    print(f"✅ Dual system integration: {result['renderer_used']} in {result['render_time']}s")
+                    
+                    return True
+                    
+        except Exception as e:
+            print(f"❌ Integrated dual rendering test failed: {e}")
+            return False
+
 
 if __name__ == "__main__":
     # Run tests manually
@@ -308,6 +521,17 @@ if __name__ == "__main__":
     print("\\n🚀 Rendering Tests:")
     test_video.test_fast_video_rendering()
     test_video.test_video_resolution_scaling()
+    
+    # Enhanced caption system tests
+    print("\\n📝 Enhanced Caption System Tests:")
+    test_video.test_dual_renderer_configuration()
+    test_video.test_margin_system()
+    test_video.test_font_validation_system()
+    
+    # Dual renderer system tests
+    print("\\n🔄 Dual Renderer System Tests:")
+    test_video.test_dual_renderer_fallback()
+    test_video.test_integrated_dual_rendering()
     
     # Cleanup tests
     print("\\n🧹 Cleanup Tests:")

@@ -10,6 +10,9 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib.audio.quality_validator import AudioQualityValidator
+from lib.audio.post_processor import AudioPostProcessor
+
 try:
     from TTS.api import TTS
     HAS_TTS = True
@@ -43,6 +46,11 @@ class CoquiSpeechGenerator:
         """
         self.config = config or CoquiTTSConfig()
         self.tts = None
+        
+        # Initialize audio processing components
+        self.quality_validator = AudioQualityValidator()
+        self.post_processor = AudioPostProcessor(sample_rate=self.config.sample_rate)
+        
         self._initialize_tts()
     
     def _initialize_tts(self):
@@ -116,23 +124,60 @@ class CoquiSpeechGenerator:
                 file_path=str(output_path)
             )
             
-            # Check if file was created and get stats
+            # Check if file was created and perform quality validation
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
-                # Get actual audio duration instead of estimate
+                print(f"🎵 Initial audio generated: {file_size:,} bytes")
+                
+                # Perform quality analysis
+                print("🔍 Analyzing audio quality...")
+                quality_report = self.quality_validator.analyze_audio(str(output_path))
+                
+                # Apply post-processing if needed
+                final_output_path = str(output_path)
+                if quality_report.needs_processing:
+                    print(f"🔧 Applying enhancements: {', '.join(quality_report.recommended_fixes)}")
+                    enhanced_path = self.post_processor.enhance_audio(str(output_path), quality_report.recommended_fixes)
+                    
+                    if os.path.exists(enhanced_path) and enhanced_path != str(output_path):
+                        # Replace original with enhanced version
+                        os.replace(enhanced_path, str(output_path))
+                        print("✅ Audio enhancement applied")
+                    else:
+                        print("ℹ️  Using original audio (enhancement not needed)")
+                else:
+                    print("✅ Audio quality acceptable, no enhancement needed")
+                
+                # Get accurate duration measurement
                 actual_duration = self._get_actual_audio_duration(str(output_path))
+                final_file_size = os.path.getsize(output_path)
+                
+                print(f"📊 Final audio metrics:")
+                print(f"   Duration: {actual_duration:.2f}s")
+                print(f"   Quality score: {quality_report.quality_score:.2f}/1.0")
+                print(f"   Speech content: {quality_report.speech_percentage:.1f}%")
+                print(f"   Dynamic range: {quality_report.dynamic_range_db:.1f}dB")
                 
                 return {
                     "success": True,
                     "output_path": str(output_path),
-                    "file_size": file_size,
+                    "file_size": final_file_size,
                     "estimated_duration": actual_duration,
                     "text_word_count": len(full_text.split()),
+                    "quality_metrics": {
+                        "quality_score": quality_report.quality_score,
+                        "silence_percentage": quality_report.silence_percentage,
+                        "speech_percentage": quality_report.speech_percentage,
+                        "dynamic_range_db": quality_report.dynamic_range_db,
+                        "clipping_detected": quality_report.clipping_detected,
+                        "enhancements_applied": quality_report.recommended_fixes if quality_report.needs_processing else []
+                    },
                     "tts_config": {
                         "model": self.config.model_name,
                         "sample_rate": self.config.sample_rate,
                         "format": self.config.output_format,
-                        "device": self.config.device
+                        "device": self.config.device,
+                        "quality_validation": True
                     },
                     "engine": "coqui-tts"
                 }

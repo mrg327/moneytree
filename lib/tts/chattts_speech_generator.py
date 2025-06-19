@@ -13,6 +13,9 @@ from pathlib import Path
 import scipy.io.wavfile as wavfile
 
 from lib.utils.logging_config import get_logger, LoggedOperation, log_execution_time
+from lib.audio.quality_validator import AudioQualityValidator
+from lib.audio.segment_processor import AudioSegmentProcessor, ConsistentVoiceManager
+from lib.audio.post_processor import AudioPostProcessor
 
 logger = get_logger(__name__)
 
@@ -52,6 +55,13 @@ class ChatTTSSpeechGenerator:
         """
         self.config = config or ChatTTSConfig()
         self.chat = None
+        
+        # Initialize audio processing components
+        self.quality_validator = AudioQualityValidator()
+        self.segment_processor = AudioSegmentProcessor(sample_rate=self.config.sample_rate)
+        self.voice_manager = ConsistentVoiceManager()
+        self.post_processor = AudioPostProcessor(sample_rate=self.config.sample_rate)
+        
         self._initialize_chattts()
     
     def _initialize_chattts(self):
@@ -124,79 +134,98 @@ class ChatTTSSpeechGenerator:
             safe_topic = ''.join(c for c in topic if c.isalnum() or c in '_-')[:50]
             output_path = audio_dir / f"{safe_topic}_chattts.{self.config.output_format}"
         
-        # Generate speech using clean basic approach
+        # Generate speech using enhanced pipeline with quality optimization
         try:
             print(f"🗣️  Generating natural speech: {output_path}")
             print(f"   Config: temperature={self.config.temperature}, top_k={self.config.top_k}, top_p={self.config.top_p}")
             
-            # Clean and normalize text
+            # Clean and normalize text with improved handling
             clean_text = self._normalize_text_for_tts(full_text)
             
-            # Split into manageable chunks
+            # Split into manageable chunks with natural boundaries
             text_chunks = self._split_text_for_tts(clean_text, max_length=150)
             print(f"   Processing {len(text_chunks)} text chunks")
             
-            # Sample a consistent speaker for all chunks
-            print("   Sampling consistent speaker voice...")
-            rand_spk = self.chat.sample_random_speaker()
+            # Get consistent speaker for all chunks
+            print("   Using consistent speaker voice...")
+            consistent_speaker = self.voice_manager.get_consistent_speaker(self.chat)
+            if consistent_speaker is None:
+                consistent_speaker = self.chat.sample_random_speaker()
+                logger.warning("Fallback to new speaker - consistency may be affected")
             
             # Set up inference parameters
             params_infer_code = ChatTTS.Chat.InferCodeParams(
-                spk_emb=rand_spk,
+                spk_emb=consistent_speaker,
                 temperature=self.config.temperature,
                 top_P=self.config.top_p,
                 top_K=self.config.top_k
             )
             
-            # Add minimal prosodic enhancement for more natural speech
-            enhanced_chunks = []
-            for i, chunk in enumerate(text_chunks):
-                # Add very subtle natural speech tokens (minimal and safe)
-                if i == 0:
-                    # Only add slight oral characteristic to first chunk
-                    enhanced_chunk = f"[oral_2]{chunk}"
+            # Enhanced text processing with natural pauses
+            enhanced_chunks = self._prepare_chunks_with_natural_pauses(text_chunks)
+            
+            # Generate audio segments
+            print(f"   Generating speech segments with consistent voice...")
+            audio_segments = []
+            for i, chunk in enumerate(enhanced_chunks):
+                # Generate individual segment
+                segment_wavs = self.chat.infer([chunk], params_infer_code=params_infer_code)
+                if segment_wavs and len(segment_wavs) > 0:
+                    audio_segments.append(segment_wavs[0])
+                    print(f"   ✓ Generated segment {i+1}/{len(enhanced_chunks)}")
                 else:
-                    enhanced_chunk = chunk
-                enhanced_chunks.append(enhanced_chunk)
+                    logger.warning(f"Failed to generate segment {i+1}")
             
-            # Generate audio for all chunks at once
-            print(f"   Generating speech for all chunks with minimal enhancement...")
-            wavs = self.chat.infer(enhanced_chunks, params_infer_code=params_infer_code)
+            if not audio_segments:
+                return self._fallback_response("No audio segments generated")
             
-            if not wavs or len(wavs) == 0:
-                return self._fallback_response("No audio generated from text")
+            # Validate voice consistency across segments
+            consistency_score = self.voice_manager.validate_voice_consistency(audio_segments)
+            print(f"   Voice consistency: {consistency_score:.2f}")
             
-            # Concatenate all audio chunks
-            if len(wavs) > 1:
-                final_audio = np.concatenate(wavs)
+            # Apply smooth concatenation with crossfading
+            print("   Applying smooth concatenation with crossfading...")
+            final_audio = self.segment_processor.concatenate_with_crossfade(
+                audio_segments, fade_ms=100
+            )
+            
+            # Apply quality validation and enhancement
+            print("   Validating and enhancing audio quality...")
+            
+            # Save initial version for quality analysis
+            temp_path = str(output_path).replace('.wav', '_temp.wav')
+            self._save_audio_array(final_audio, temp_path)
+            
+            # Perform quality analysis
+            quality_report = self.quality_validator.analyze_audio(temp_path)
+            
+            # Apply post-processing if needed
+            if quality_report.needs_processing:
+                print(f"   Applying audio enhancements: {', '.join(quality_report.recommended_fixes)}")
+                enhanced_path = self.post_processor.enhance_audio(temp_path, quality_report.recommended_fixes)
+                
+                # Use enhanced version if successful
+                if os.path.exists(enhanced_path):
+                    final_output_path = enhanced_path
+                    # Rename to final output path
+                    if enhanced_path != str(output_path):
+                        os.rename(enhanced_path, str(output_path))
+                else:
+                    os.rename(temp_path, str(output_path))
             else:
-                final_audio = wavs[0]
+                # Use original version
+                os.rename(temp_path, str(output_path))
+                print("   Audio quality acceptable, no enhancement needed")
             
-            # Save to file using torchaudio for better compatibility
-            try:
-                # Convert to torch tensor for torchaudio
-                audio_tensor = torch.from_numpy(final_audio)
-                if len(audio_tensor.shape) == 1:
-                    audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
-                
-                # Try torchaudio first
-                try:
-                    import torchaudio
-                    torchaudio.save(str(output_path), audio_tensor, self.config.sample_rate)
-                    print(f"✅ Audio saved with torchaudio")
-                except:
-                    # Fallback to scipy
-                    wavfile.write(str(output_path), self.config.sample_rate, final_audio)
-                    print(f"✅ Audio saved with scipy")
-                    
-            except Exception as save_error:
-                print(f"⚠️ Save error: {save_error}, checking if file exists...")
-                
-            # Verify file was created
+            # Final verification
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
                 duration_estimate = len(final_audio) / self.config.sample_rate
-                print(f"✅ Audio verified: {file_size:,} bytes, {duration_estimate:.1f}s duration")
+                
+                print(f"✅ Enhanced audio completed:")
+                print(f"   File: {file_size:,} bytes, {duration_estimate:.1f}s duration")
+                print(f"   Quality score: {quality_report.quality_score:.2f}/1.0")
+                print(f"   Voice consistency: {consistency_score:.2f}")
                 
                 return {
                     "success": True,
@@ -204,12 +233,21 @@ class ChatTTSSpeechGenerator:
                     "file_size": file_size,
                     "estimated_duration": duration_estimate,
                     "text_word_count": len(full_text.split()),
+                    "quality_metrics": {
+                        "quality_score": quality_report.quality_score,
+                        "voice_consistency": consistency_score,
+                        "silence_percentage": quality_report.silence_percentage,
+                        "speech_percentage": quality_report.speech_percentage,
+                        "dynamic_range_db": quality_report.dynamic_range_db,
+                        "enhancements_applied": quality_report.recommended_fixes
+                    },
                     "tts_config": {
                         "model": "ChatTTS",
                         "sample_rate": self.config.sample_rate,
                         "format": self.config.output_format,
                         "temperature": self.config.temperature,
-                        "chunks_processed": len(text_chunks)
+                        "chunks_processed": len(text_chunks),
+                        "crossfade_applied": True
                     },
                     "engine": "chattts"
                 }
@@ -377,6 +415,81 @@ class ChatTTSSpeechGenerator:
         print(f"   Temperature: {self.config.temperature}")
         print(f"   Top-K: {self.config.top_k}")
         print(f"   Top-P: {self.config.top_p}")
+    
+    def _prepare_chunks_with_natural_pauses(self, text_chunks: List[str]) -> List[str]:
+        """
+        Prepare text chunks with natural pauses and improved prosody.
+        
+        Args:
+            text_chunks: List of text chunks to enhance
+            
+        Returns:
+            List of enhanced text chunks with natural pauses
+        """
+        enhanced_chunks = []
+        
+        for i, chunk in enumerate(text_chunks):
+            enhanced_chunk = chunk
+            
+            # Add natural speech characteristics only to first chunk
+            if i == 0:
+                # Very subtle oral characteristic for natural start
+                enhanced_chunk = f"[oral_2]{enhanced_chunk}"
+            
+            # Add natural pause tokens between sentences within chunks
+            enhanced_chunk = enhanced_chunk.replace('. ', '. [uv_break] ')
+            enhanced_chunk = enhanced_chunk.replace('! ', '! [uv_break] ')
+            enhanced_chunk = enhanced_chunk.replace('? ', '? [uv_break] ')
+            
+            # Add breath pause at the end of each chunk (except last)
+            if i < len(text_chunks) - 1:
+                enhanced_chunk += " [uv_break]"
+            
+            enhanced_chunks.append(enhanced_chunk)
+        
+        return enhanced_chunks
+    
+    def _save_audio_array(self, audio_data: np.ndarray, output_path: str):
+        """
+        Save audio array to file using available libraries.
+        
+        Args:
+            audio_data: Audio data as numpy array
+            output_path: Path to save the audio file
+        """
+        try:
+            # Try torchaudio first
+            try:
+                import torchaudio
+                audio_tensor = torch.from_numpy(audio_data)
+                if len(audio_tensor.shape) == 1:
+                    audio_tensor = audio_tensor.unsqueeze(0)  # Add channel dimension
+                torchaudio.save(output_path, audio_tensor, self.config.sample_rate)
+                return
+            except ImportError:
+                pass
+            
+            # Fallback to scipy
+            try:
+                # Ensure audio is in the right format for WAV
+                if audio_data.dtype != np.int16:
+                    # Convert float to int16
+                    audio_int16 = (audio_data * 32767).astype(np.int16)
+                else:
+                    audio_int16 = audio_data
+                
+                wavfile.write(output_path, self.config.sample_rate, audio_int16)
+                return
+            except Exception as e:
+                logger.warning(f"scipy write failed: {e}")
+            
+            # Last resort: basic file write (not recommended but works)
+            logger.warning("Using basic numpy save as fallback")
+            np.save(output_path.replace('.wav', '.npy'), audio_data)
+            
+        except Exception as e:
+            logger.error(f"Failed to save audio: {e}")
+            raise
 
 
 def get_recommended_voice_settings() -> List[Dict[str, Any]]:

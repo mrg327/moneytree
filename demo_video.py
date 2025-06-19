@@ -16,6 +16,8 @@ from lib.llm.llm_generator import LLMMonologueGenerator, LLMConfig
 from lib.tts.chattts_speech_generator import ChatTTSSpeechGenerator, ChatTTSConfig
 from lib.tts.coqui_speech_generator import CoquiSpeechGenerator, CoquiTTSConfig
 from lib.video.clip import VideoClip, CaptionStyle, VideoConfig, create_sample_template
+from lib.pipeline.media_controller import MediaController, MediaConfig
+from lib.audio.duration_estimator import AudioDurationEstimator
 
 # Setup logging
 setup_logging(log_level="INFO", console_output=True)
@@ -41,6 +43,10 @@ def main():
     parser.add_argument('--format', choices=['vertical', 'horizontal'], default='vertical',
                        help='Video format: vertical for TikTok/YT Shorts, horizontal for standard')
     parser.add_argument('--create-template', help='Create a sample template video at this path')
+    parser.add_argument('--disable-optimization', action='store_true',
+                       help='Disable pipeline optimizations (for debugging)')
+    parser.add_argument('--buffer-factor', type=float, default=1.15,
+                       help='Buffer factor for early media trimming (default: 1.15 = 15% buffer)')
     
     args = parser.parse_args()
     
@@ -67,13 +73,25 @@ def main():
         logger.error(f"Template video not found: {template_path}")
         return
     
-    logger.info("MoneyTree: Complete Video Generation Pipeline")
+    logger.info("MoneyTree: Optimized Video Generation Pipeline")
     logger.info(f"Topic: {args.topic}")
     logger.info(f"TTS Engine: {args.engine}")
     logger.info(f"Format: {args.format.title()} ({'9:16' if args.format == 'vertical' else '16:9'})")
     logger.info(f"Template: {template_path.name}")
     if args.music:
         logger.info(f"Background Music: {Path(args.music).name}")
+    
+    # Initialize optimized pipeline components
+    media_config = MediaConfig(
+        enable_early_trimming=not args.disable_optimization,
+        buffer_factor=args.buffer_factor,
+        enable_quality_validation=True,
+        enable_background_music_optimization=True
+    )
+    media_controller = MediaController(media_config)
+    
+    if not args.disable_optimization:
+        logger.info(f"🚀 Pipeline optimizations enabled (buffer factor: {args.buffer_factor:.1%})")
     
     # Step 1: Get Wikipedia content
     with LoggedOperation(logger, "Wikipedia content fetching"):
@@ -87,8 +105,8 @@ def main():
         logger.info(f"Found: {content.get('title', args.topic)}")
         logger.debug(f"Description: {content.get('description', 'No description')}")
     
-    # Step 2: Generate content
-    with LoggedOperation(logger, "educational content generation"):
+    # Step 2: Generate content and optimize media pipeline
+    with LoggedOperation(logger, "content generation and pipeline optimization"):
         if args.use_rule_based:
             logger.info("Using rule-based generation")
             generator = HumorousDiscussionGenerator()
@@ -106,6 +124,28 @@ def main():
         
         logger.info(f"Generated content ({monologue['word_count']} words)")
         logger.debug(f"Estimated duration: {monologue['estimated_duration']:.1f} seconds")
+        
+        # Optimize media processing pipeline
+        logger.info("🎯 Optimizing media pipeline with early duration estimation")
+        media_optimization = media_controller.process_content_optimized(
+            monologue, args.engine, str(template_path), args.music
+        )
+        
+        # Show optimization results
+        audio_estimate = media_optimization['audio_estimate']
+        logger.info(f"📊 Audio duration estimate: {audio_estimate.estimated_duration:.1f}s "
+                   f"(confidence: {audio_estimate.confidence_level:.2f})")
+        
+        if audio_estimate.quality_warnings:
+            for warning in audio_estimate.quality_warnings:
+                logger.warning(f"⚠️  Content analysis: {warning}")
+        
+        # Show recommended TTS config
+        tts_recommendations = media_optimization['recommended_tts_config']
+        if tts_recommendations['suggested_adjustments']:
+            logger.info("💡 TTS recommendations:")
+            for adjustment in tts_recommendations['suggested_adjustments']:
+                logger.info(f"   • {adjustment}")
     
     # Get text content for captions
     if 'generated_text' in monologue:
@@ -122,10 +162,10 @@ def main():
     else:
         caption_text = "No caption text available"
     
-    # Step 3: Generate speech
-    with LoggedOperation(logger, "speech generation"):
+    # Step 3: Generate speech with enhanced quality
+    with LoggedOperation(logger, "enhanced speech generation"):
         if args.engine == 'chattts':
-            logger.info("Using ChatTTS for natural speech")
+            logger.info("Using enhanced ChatTTS for natural speech")
             from lib.tts.chattts_speech_generator import get_recommended_voice_settings
             
             voice_settings = next((v for v in get_recommended_voice_settings() if v['name'] == args.voice),
@@ -145,7 +185,7 @@ def main():
                 logger.error("ChatTTS not available")
                 return
         else:
-            logger.info("Using Coqui TTS for synthetic speech")
+            logger.info("Using enhanced Coqui TTS for synthetic speech")
             
             model_map = {
                 'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
@@ -172,13 +212,49 @@ def main():
             return
         
         audio_path = audio_result['output_path']
-        logger.info(f"Speech generated: {Path(audio_path).name}")
-        logger.debug(f"Duration: {audio_result['estimated_duration']:.1f} seconds")
+        logger.info(f"Enhanced speech generated: {Path(audio_path).name}")
+        logger.info(f"Duration: {audio_result['estimated_duration']:.1f} seconds")
+        
+        # Show quality metrics if available
+        if 'quality_metrics' in audio_result:
+            quality = audio_result['quality_metrics']
+            logger.info(f"Quality score: {quality.get('quality_score', 'N/A'):.2f}")
+            if quality.get('enhancements_applied'):
+                logger.info(f"Enhancements applied: {', '.join(quality['enhancements_applied'])}")
+        
+        # Validate audio before expensive video processing
+        should_proceed, validation_report = media_controller.validate_audio_before_media_processing(audio_path)
+        if not should_proceed:
+            logger.error("Audio quality too low for video processing. Consider regenerating audio.")
+            logger.info("Use --disable-optimization to skip quality validation")
+            return
+        
+        # Finalize media optimization with actual audio duration
+        logger.info("🎬 Finalizing media optimization with actual audio duration")
+        final_media = media_controller.finalize_media_with_actual_duration(audio_result, media_optimization)
+        
+        if not final_media['success']:
+            logger.error("Media finalization failed")
+            return
+        
+        # Show optimization savings
+        savings = final_media['savings_summary']
+        if savings['early_trimming_effective']:
+            logger.info(f"💰 Resource savings: {savings['summary']}")
+            logger.info(f"Duration accuracy: {savings['duration_accuracy_percent']:.1f}%")
     
-    # Step 4: Create video
-    with LoggedOperation(logger, "video creation with captions"):
+    # Step 4: Create video with optimized media
+    with LoggedOperation(logger, "optimized video creation with captions"):
         try:
-            with VideoClip(str(template_path)) as video_clip:
+            # Use optimized template path
+            optimized_template = final_media.get('final_template_path', str(template_path))
+            optimized_music = final_media.get('final_music_path', args.music)
+            
+            logger.info(f"Using optimized template: {Path(optimized_template).name}")
+            if optimized_music and optimized_music != args.music:
+                logger.info(f"Using optimized music: {Path(optimized_music).name}")
+            
+            with VideoClip(optimized_template) as video_clip:
                 # Configure caption style based on format
                 if args.format == 'vertical':
                     caption_style = CaptionStyle.for_vertical_video(font_size=36)
@@ -201,10 +277,10 @@ def main():
                 if caption_result['success']:
                     logger.info(f"Captions added: {caption_result['caption_count']} segments")
             
-                # Add background music if provided
-                if args.music and Path(args.music).exists():
+                # Add background music if provided (use optimized version)
+                if optimized_music and Path(optimized_music).exists():
                     music_result = video_clip.add_background_music(
-                        args.music,
+                        optimized_music,
                         volume=0.25,  # Lower volume to not overpower narration
                         fade_in=3.0,
                         fade_out=3.0
@@ -242,14 +318,47 @@ def main():
             logger.error(f"Video creation failed: {e}")
             return
     
-    # Final summary
-    logger.info("Complete Pipeline Summary:")
+    # Final summary with optimization metrics
+    logger.info("Optimized Pipeline Summary:")
     logger.info(f"Topic: {content.get('title', args.topic)}")
     logger.info(f"Content: {'LLM' if not args.use_rule_based and monologue.get('model_used') != 'fallback' else 'Rule-based'}")
-    logger.info(f"TTS: {args.engine.upper()}")
+    logger.info(f"TTS: {args.engine.upper()} (Enhanced)")
     logger.info(f"Format: {args.format.title()} ({'9:16' if args.format == 'vertical' else '16:9'})")
     logger.info(f"Video: {args.quality} quality MP4")
-    logger.info(f"Features: Synchronized captions{'+ background music' if args.music else ''}")
+    logger.info(f"Features: Synchronized captions{'+ optimized background music' if optimized_music else ''}")
+    
+    # Show optimization results
+    if not args.disable_optimization:
+        logger.info("🚀 Optimization Results:")
+        
+        # Audio quality metrics
+        if 'quality_metrics' in audio_result:
+            quality = audio_result['quality_metrics']
+            logger.info(f"   Audio quality score: {quality.get('quality_score', 'N/A'):.2f}/1.0")
+            logger.info(f"   Speech content: {quality.get('speech_percentage', 'N/A'):.1f}%")
+        
+        # Resource savings
+        savings = final_media['savings_summary']
+        logger.info(f"   Duration estimation accuracy: {savings['duration_accuracy_percent']:.1f}%")
+        if savings['early_trimming_effective']:
+            logger.info(f"   Resources saved: {savings['summary']}")
+        else:
+            logger.info("   No media trimming was needed (optimal content length)")
+        
+        # Buffer efficiency
+        buffer_efficiency = savings.get('buffer_efficiency', 1.0)
+        if buffer_efficiency < 0.9:
+            logger.info(f"   Buffer efficiency: {buffer_efficiency:.1%} (consider reducing buffer factor)")
+        elif buffer_efficiency > 1.0:
+            logger.warning(f"   Buffer exceeded: {buffer_efficiency:.1%} (audio longer than estimated)")
+        else:
+            logger.info(f"   Buffer efficiency: {buffer_efficiency:.1%} (optimal)")
+    
+    # Cleanup temporary files
+    try:
+        media_controller.cleanup_temp_files()
+    except Exception as e:
+        logger.warning(f"Failed to cleanup temp files: {e}")
 
 
 if __name__ == "__main__":

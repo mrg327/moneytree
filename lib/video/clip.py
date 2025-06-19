@@ -386,6 +386,77 @@ class VideoClip:
         
         return timing_data
     
+    def _optimize_font_size_for_content(self, text: str, style: CaptionStyle, max_width: int, max_height: int) -> CaptionStyle:
+        """Dynamically adjust font size based on content length to optimize readability."""
+        # Create a copy of the style to avoid modifying the original
+        optimized_style = CaptionStyle(
+            font_size=style.font_size,
+            font_color=style.font_color,
+            bg_color=style.bg_color,
+            bg_opacity=style.bg_opacity,
+            position=style.position,
+            max_width=style.max_width,
+            words_per_caption=style.words_per_caption,
+            font_family=style.font_family,
+            stroke_color=style.stroke_color,
+            stroke_width=style.stroke_width
+        )
+        
+        # Calculate content complexity metrics
+        word_count = len(text.split())
+        char_count = len(text)
+        line_count = text.count('\n') + 1
+        
+        # Determine base font size adjustments
+        base_font_size = style.font_size
+        
+        # Adjust font size based on content length
+        if word_count <= 3:
+            # Very short text - can use larger font
+            size_multiplier = 1.2
+        elif word_count <= 6:
+            # Standard caption length - use base size
+            size_multiplier = 1.0
+        elif word_count <= 10:
+            # Longer caption - reduce slightly
+            size_multiplier = 0.9
+        else:
+            # Very long caption - reduce more
+            size_multiplier = 0.8
+        
+        # Additional adjustment for character density
+        if char_count > 60:
+            size_multiplier *= 0.9
+        
+        # Apply the multiplier
+        optimized_font_size = int(base_font_size * size_multiplier)
+        
+        # Ensure font size stays within reasonable bounds
+        min_font_size = max(18, base_font_size * 0.6)  # Never go below 18px or 60% of base
+        max_font_size = min(72, base_font_size * 1.4)  # Never exceed 72px or 140% of base
+        
+        optimized_font_size = max(min_font_size, min(optimized_font_size, max_font_size))
+        
+        # Test if the optimized size actually fits better
+        test_width, test_height = self._measure_text_dimensions(text, 
+            CaptionStyle(font_size=optimized_font_size, font_family=style.font_family, stroke_width=style.stroke_width))
+        
+        # If the text still doesn't fit, reduce further
+        attempts = 0
+        while (test_width > max_width * 0.9 or test_height > max_height * 0.3) and optimized_font_size > min_font_size and attempts < 5:
+            optimized_font_size = int(optimized_font_size * 0.9)
+            test_width, test_height = self._measure_text_dimensions(text,
+                CaptionStyle(font_size=optimized_font_size, font_family=style.font_family, stroke_width=style.stroke_width))
+            attempts += 1
+        
+        optimized_style.font_size = optimized_font_size
+        
+        # Log optimization details
+        if optimized_font_size != base_font_size:
+            logger.debug(f"Font size optimized: {base_font_size} → {optimized_font_size} for text: '{text[:30]}...'")
+        
+        return optimized_style
+
     def _create_caption_clips_with_dimensions(
         self, 
         timing_data: List[Dict[str, Any]], 
@@ -394,7 +465,7 @@ class VideoClip:
         height: int
     ) -> List[Any]:
         """
-        Create caption clips with precise positioning based on video dimensions.
+        Create caption clips with precise positioning and dynamic font sizing.
         
         Args:
             timing_data: List of caption timing information
@@ -409,17 +480,22 @@ class VideoClip:
         
         for caption_info in timing_data:
             try:
-                # First wrap text based on available width (80% of video width)
+                # Optimize font size for this specific caption content
                 max_text_width = int(width * 0.8)  # Leave 20% for margins
-                text = self._wrap_text_for_display_pixel_based(caption_info['text'], style, max_text_width)
+                optimized_style = self._optimize_font_size_for_content(
+                    caption_info['text'], style, max_text_width, height
+                )
                 
-                # Calculate safe position with bounds checking
-                position = self._calculate_safe_position(text, style, width, height)
+                # Wrap text with optimized style
+                text = self._wrap_text_for_display_pixel_based(caption_info['text'], optimized_style, max_text_width)
+                
+                # Use computer vision positioning for optimal placement
+                position = self._find_optimal_caption_position_cv(text, optimized_style, width, height)
                 
                 # Create text clip with enhanced styling
                 txt_clip = self._create_styled_text_clip(
                     text, 
-                    style, 
+                    optimized_style, 
                     position, 
                     caption_info['start'], 
                     caption_info['duration']
@@ -432,101 +508,291 @@ class VideoClip:
                 logger.warning(f"Failed to create caption clip for '{caption_info['text'][:30]}...': {e}")
                 continue
         
-        logger.info(f"✅ Created {len(caption_clips)} caption clips")
+        logger.info(f"✅ Created {len(caption_clips)} caption clips with dynamic sizing")
         return caption_clips
     
     
+    def _get_consistent_font(self, style: CaptionStyle):
+        """Get a consistent font object with proper caching and fallback handling."""
+        if not hasattr(self, '_font_cache'):
+            self._font_cache = {}
+            
+        # Create cache key based on font family and size
+        cache_key = f"{style.font_family or 'default'}_{style.font_size}"
+        
+        if cache_key in self._font_cache:
+            return self._font_cache[cache_key]
+        
+        font = None
+        
+        # Try to load specified font family
+        if style.font_family:
+            try:
+                font = ImageFont.truetype(style.font_family, style.font_size)
+                logger.debug(f"Loaded font: {style.font_family} at size {style.font_size}")
+            except Exception as e:
+                logger.warning(f"Failed to load font '{style.font_family}': {e}")
+        
+        # Try common system fonts as fallback
+        if font is None:
+            fallback_fonts = [
+                "DejaVuSans.ttf",
+                "DejaVuSans-Bold.ttf", 
+                "Arial.ttf",
+                "arial.ttf",
+                "LiberationSans-Regular.ttf",
+                "NotoSans-Regular.ttf"
+            ]
+            
+            for fallback_font in fallback_fonts:
+                try:
+                    font = ImageFont.truetype(fallback_font, style.font_size)
+                    logger.debug(f"Using fallback font: {fallback_font} at size {style.font_size}")
+                    break
+                except:
+                    continue
+        
+        # Final fallback to PIL default
+        if font is None:
+            try:
+                font = ImageFont.load_default()
+                logger.warning(f"Using PIL default font, font size may not be accurate")
+            except:
+                # Absolute fallback
+                font = None
+                logger.error("No usable font found, text measurement will be approximate")
+        
+        # Cache the font for future use
+        self._font_cache[cache_key] = font
+        return font
+
     def _measure_text_dimensions(self, text: str, style: CaptionStyle) -> tuple:
-        """Measure actual pixel dimensions of rendered text using PIL."""
+        """Measure actual pixel dimensions of rendered text using PIL with improved consistency."""
         try:
             # Create a dummy image to measure text
             dummy_img = Image.new('RGB', (1, 1))
             draw = ImageDraw.Draw(dummy_img)
             
-            # Load font - use default if none specified
-            if style.font_family:
-                try:
-                    font = ImageFont.truetype(style.font_family, style.font_size)
-                except:
-                    font = ImageFont.load_default()
-            else:
-                font = ImageFont.load_default()
+            # Get consistent font
+            font = self._get_consistent_font(style)
             
-            # Get bounding box of the text
-            bbox = draw.textbbox((0, 0), text, font=font)
-            width = bbox[2] - bbox[0]
-            height = bbox[3] - bbox[1]
-            
-            # Add stroke width to dimensions if present
-            if style.stroke_width > 0:
-                width += style.stroke_width * 2
-                height += style.stroke_width * 2
+            if font is not None:
+                # Get bounding box of the text
+                bbox = draw.textbbox((0, 0), text, font=font)
+                width = bbox[2] - bbox[0]
+                height = bbox[3] - bbox[1]
                 
-            return (width, height)
-            
+                # Add stroke width to dimensions if present
+                if style.stroke_width > 0:
+                    width += style.stroke_width * 2
+                    height += style.stroke_width * 2
+                
+                # Add small padding to account for font rendering variations
+                width += 4
+                height += 2
+                
+                return (width, height)
+            else:
+                raise Exception("No font available")
+                
         except Exception as e:
-            logger.warning(f"Text measurement failed, using fallback: {e}")
-            # Fallback: rough estimation
+            logger.warning(f"Text measurement failed, using enhanced fallback: {e}")
+            # Enhanced fallback with better estimates
             lines = text.count('\n') + 1
-            chars_per_line = max(len(line) for line in text.split('\n'))
-            return (chars_per_line * style.font_size * 0.6, lines * style.font_size * 1.2)
+            chars_per_line = max(len(line) for line in text.split('\n')) if text.strip() else 0
+            
+            # More accurate character width estimation based on font size
+            char_width = style.font_size * 0.6  # Average character width ratio
+            line_height = style.font_size * 1.4  # More realistic line height
+            
+            estimated_width = chars_per_line * char_width + style.stroke_width * 2
+            estimated_height = lines * line_height + style.stroke_width * 2
+            
+            return (int(estimated_width), int(estimated_height))
 
     def _wrap_text_for_display_pixel_based(self, text: str, style: CaptionStyle, max_width: int) -> str:
-        """Wrap text based on actual pixel width instead of character count."""
+        """Wrap text based on actual pixel width with 10% safety margin and overflow detection."""
+        # Apply 10% safety margin to prevent text cutoffs
+        safe_max_width = int(max_width * 0.9)
+        original_text = text
+        
         words = text.split()
         lines = []
         current_line = ""
+        truncated_words = []
         
         for word in words:
             test_line = current_line + (" " if current_line else "") + word
             text_width, _ = self._measure_text_dimensions(test_line, style)
             
-            if text_width <= max_width:
+            if text_width <= safe_max_width:
                 current_line = test_line
             else:
                 if current_line:
                     lines.append(current_line)
                     current_line = word
                 else:
-                    # Single word too long, truncate
-                    while self._measure_text_dimensions(word + "...", style)[0] > max_width and len(word) > 3:
+                    # Single word too long, truncate with safety margin
+                    original_word = word
+                    while self._measure_text_dimensions(word + "...", style)[0] > safe_max_width and len(word) > 3:
                         word = word[:-1]
-                    current_line = word + "..."
+                    if word != original_word:
+                        truncated_words.append(original_word)
+                        word = word + "..."
+                    current_line = word
         
         if current_line:
             lines.append(current_line)
         
-        return '\n'.join(lines[:2])  # Still limit to 2 lines
+        final_text = '\n'.join(lines[:2])  # Still limit to 2 lines
+        
+        # Text overflow detection and warnings
+        if len(lines) > 2:
+            dropped_lines = lines[2:]
+            logger.warning(f"Caption overflow: {len(dropped_lines)} lines dropped from '{original_text[:30]}...'")
+            logger.debug(f"Dropped content: {' '.join(dropped_lines)}")
+        
+        if truncated_words:
+            logger.warning(f"Caption truncation: {len(truncated_words)} words truncated in '{original_text[:30]}...'")
+            logger.debug(f"Truncated words: {truncated_words}")
+        
+        # Check if final text is significantly shorter than original
+        if len(final_text.replace('\n', ' ')) < len(original_text) * 0.7:
+            logger.warning(f"Significant text loss in caption: {len(final_text)}/{len(original_text)} chars retained")
+            
+        return final_text
+
+    def _find_optimal_caption_position_cv(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
+        """Use computer vision to find optimal caption position based on video content."""
+        try:
+            if not self.template_clip:
+                return self._calculate_safe_position(text, style, video_width, video_height)
+            
+            # Sample frame for analysis
+            sample_time = min(self.template_clip.duration / 2, 5.0)
+            frame = self.template_clip.get_frame(sample_time)
+            
+            # Convert to grayscale for edge detection
+            import cv2
+            import numpy as np
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            
+            # Resize to target dimensions if needed
+            if gray.shape[:2] != (video_height, video_width):
+                gray = cv2.resize(gray, (video_width, video_height))
+            
+            # Detect edges using Canny edge detection
+            edges = cv2.Canny(gray, 50, 150)
+            
+            # Calculate text dimensions
+            text_width, text_height = self._measure_text_dimensions(text, style)
+            
+            # Define candidate positions based on style preference
+            candidates = []
+            
+            if style.position == 'bottom':
+                candidates = [
+                    (video_width // 2, int(video_height * 0.85)),  # Preferred bottom
+                    (video_width // 2, int(video_height * 0.80)),  # Higher bottom
+                    (video_width // 2, int(video_height * 0.75)),  # Lower center
+                ]
+            elif style.position == 'top':
+                candidates = [
+                    (video_width // 2, int(video_height * 0.15)),  # Preferred top
+                    (video_width // 2, int(video_height * 0.20)),  # Lower top
+                    (video_width // 2, int(video_height * 0.25)),  # Upper center
+                ]
+            else:  # center
+                candidates = [
+                    (video_width // 2, int(video_height * 0.50)),  # True center
+                    (video_width // 2, int(video_height * 0.45)),  # Slightly above center
+                    (video_width // 2, int(video_height * 0.55)),  # Slightly below center
+                ]
+            
+            # Score each candidate position
+            best_score = float('inf')
+            best_position = candidates[0]
+            
+            for x_center, y_center in candidates:
+                # Define text bounding box
+                left = max(0, x_center - text_width // 2)
+                right = min(video_width, x_center + text_width // 2)
+                top = max(0, y_center - text_height // 2)
+                bottom = min(video_height, y_center + text_height // 2)
+                
+                # Extract region of interest
+                roi = edges[top:bottom, left:right]
+                
+                if roi.size == 0:
+                    continue
+                
+                # Calculate complexity score (lower is better)
+                edge_density = np.sum(roi > 0) / roi.size if roi.size > 0 else 1.0
+                
+                # Calculate brightness variance in the area
+                gray_roi = gray[top:bottom, left:right]
+                brightness_variance = np.var(gray_roi) if gray_roi.size > 0 else 1000
+                
+                # Combined score (lower is better for less busy areas)
+                score = edge_density * 0.7 + (brightness_variance / 1000) * 0.3
+                
+                # Penalty for positions too close to edges
+                edge_penalty = 0
+                if top < video_height * 0.05 or bottom > video_height * 0.95:
+                    edge_penalty += 0.2
+                if left < video_width * 0.05 or right > video_width * 0.95:
+                    edge_penalty += 0.2
+                
+                final_score = score + edge_penalty
+                
+                if final_score < best_score:
+                    best_score = final_score
+                    best_position = (x_center, y_center)
+            
+            # Convert to MoviePy format
+            x_pos = 'center'
+            y_pos = best_position[1] - text_height // 2  # Adjust for text baseline
+            
+            logger.debug(f"CV positioning: best score={best_score:.3f} at y={y_pos}")
+            return (x_pos, y_pos)
+            
+        except Exception as e:
+            logger.warning(f"Computer vision positioning failed, using safe fallback: {e}")
+            return self._calculate_safe_position(text, style, video_width, video_height)
 
     def _calculate_safe_position(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
-        """Calculate text position with margins to prevent clipping."""
+        """Calculate text position with increased margins and safety padding."""
         
         # Measure actual text dimensions
         text_width, text_height = self._measure_text_dimensions(text, style)
         
-        # Define margins (10% of video dimensions)
-        margin_x = int(video_width * 0.1)
-        margin_y = int(video_height * 0.1)
+        # Define increased margins (15% of video dimensions) + 20px buffer
+        margin_x = int(video_width * 0.15) + 20
+        margin_y = int(video_height * 0.15) + 20
         
-        # Calculate safe boundaries
+        # Calculate safe boundaries with extra padding
         safe_left = margin_x
         safe_right = video_width - margin_x
         safe_top = margin_y  
         safe_bottom = video_height - margin_y
         
+        # Add extra safety padding for text positioning
+        safety_padding = 30  # Additional pixels for safety
+        
         # Calculate position based on style, but within safe boundaries
         if style.position == 'bottom':
-            # Position text so bottom edge is at safe_bottom
-            y_pos = safe_bottom - text_height
+            # Position text so bottom edge is at safe_bottom with extra padding
+            y_pos = safe_bottom - text_height - safety_padding
         elif style.position == 'top':
-            # Position text so top edge is at safe_top
-            y_pos = safe_top
+            # Position text so top edge is at safe_top with extra padding
+            y_pos = safe_top + safety_padding
         else:  # center
             # Center vertically within safe area
             y_pos = (safe_top + safe_bottom - text_height) // 2
         
-        # Ensure text doesn't go outside safe boundaries
-        y_pos = max(safe_top, min(y_pos, safe_bottom - text_height))
+        # Ensure text doesn't go outside safe boundaries with additional checks
+        y_pos = max(safe_top + safety_padding, min(y_pos, safe_bottom - text_height - safety_padding))
         
         # X position - always center horizontally
         x_pos = 'center'
@@ -572,6 +838,72 @@ class VideoClip:
         # Limit to 2 lines max and join with actual newlines
         return '\n'.join(lines[:2])
     
+    def _analyze_video_content_for_background(self, width: int, height: int, position_y: int) -> tuple:
+        """Analyze video content at caption position to determine optimal background color."""
+        try:
+            if not self.template_clip:
+                return ('black', 0.7)  # Default fallback
+            
+            # Sample frame from middle of video
+            sample_time = min(self.template_clip.duration / 2, 5.0)  # Mid-point or 5s, whichever is less
+            
+            # Get frame at sample time
+            frame = self.template_clip.get_frame(sample_time)
+            
+            # Convert to PIL Image for analysis
+            from PIL import Image
+            pil_image = Image.fromarray(frame)
+            
+            # Resize to target dimensions if needed
+            if pil_image.size != (width, height):
+                pil_image = pil_image.resize((width, height))
+            
+            # Analyze the area where caption will be placed
+            caption_area_height = int(height * 0.2)  # Caption typically occupies 20% of height
+            
+            if position_y < height * 0.3:  # Top position
+                crop_top = 0
+                crop_bottom = caption_area_height
+            elif position_y > height * 0.7:  # Bottom position  
+                crop_top = height - caption_area_height
+                crop_bottom = height
+            else:  # Center position
+                crop_top = position_y - caption_area_height // 2
+                crop_bottom = position_y + caption_area_height // 2
+                crop_top = max(0, crop_top)
+                crop_bottom = min(height, crop_bottom)
+            
+            # Crop to caption area
+            caption_area = pil_image.crop((0, crop_top, width, crop_bottom))
+            
+            # Calculate average brightness
+            import numpy as np
+            area_array = np.array(caption_area)
+            avg_brightness = np.mean(area_array)
+            
+            # Determine background color and opacity based on brightness
+            if avg_brightness < 85:  # Dark background
+                bg_color = 'black'
+                opacity = 0.6  # Less opacity on dark backgrounds
+            elif avg_brightness > 170:  # Light background
+                bg_color = 'black' 
+                opacity = 0.8  # More opacity on light backgrounds for contrast
+            else:  # Medium brightness
+                bg_color = 'black'
+                opacity = 0.7  # Standard opacity
+            
+            # Calculate color variance to detect busy areas
+            color_variance = np.var(area_array)
+            if color_variance > 2000:  # High variance = busy/complex area
+                opacity = min(opacity + 0.1, 0.9)  # Increase opacity for busy backgrounds
+            
+            logger.debug(f"Background analysis: brightness={avg_brightness:.1f}, variance={color_variance:.1f} → {bg_color} @ {opacity}")
+            return (bg_color, opacity)
+            
+        except Exception as e:
+            logger.warning(f"Background analysis failed, using default: {e}")
+            return ('black', 0.7)  # Safe default
+
     def _create_styled_text_clip(
         self, 
         text: str, 
@@ -580,20 +912,44 @@ class VideoClip:
         start_time: float, 
         duration: float
     ):
-        """Create a styled text clip with better error handling."""
+        """Create a styled text clip with background adaptation and better error handling."""
         try:
+            # Adapt background based on video content if position is numeric
+            adapted_style = style
+            if isinstance(position, tuple) and len(position) == 2 and isinstance(position[1], (int, float)):
+                video_width = self.template_size[0] if self.template_size else 1080
+                video_height = self.template_size[1] if self.template_size else 1920
+                
+                bg_color, bg_opacity = self._analyze_video_content_for_background(
+                    video_width, video_height, int(position[1])
+                )
+                
+                # Create adapted style with optimized background
+                adapted_style = CaptionStyle(
+                    font_size=style.font_size,
+                    font_color=style.font_color,
+                    bg_color=bg_color,
+                    bg_opacity=bg_opacity,
+                    position=style.position,
+                    max_width=style.max_width,
+                    words_per_caption=style.words_per_caption,
+                    font_family=style.font_family,
+                    stroke_color=style.stroke_color,
+                    stroke_width=style.stroke_width
+                )
+            
             # Create text clip with full styling options
             clip_kwargs = {
                 'text': text,
-                'font_size': style.font_size,
-                'color': style.font_color,
-                'stroke_color': style.stroke_color,
-                'stroke_width': style.stroke_width
+                'font_size': adapted_style.font_size,
+                'color': adapted_style.font_color,
+                'stroke_color': adapted_style.stroke_color,
+                'stroke_width': adapted_style.stroke_width
             }
             
             # Only add font if specified
-            if style.font_family:
-                clip_kwargs['font'] = style.font_family
+            if adapted_style.font_family:
+                clip_kwargs['font'] = adapted_style.font_family
             
             txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(start_time).with_duration(duration)
             return txt_clip

@@ -309,6 +309,21 @@ class ChatTTSSpeechGenerator:
         text = text.replace('@', ' at ')
         text = text.replace('#', ' number ')
         
+        # Handle Roman numerals (fix for "It" vs "II" issues)
+        roman_numerals = {
+            'II': 'the second', 'III': 'the third', 'IV': 'the fourth', 'VI': 'the sixth',
+            'VII': 'the seventh', 'VIII': 'the eighth', 'IX': 'the ninth', 'XI': 'the eleventh',
+            'XII': 'the twelfth', 'XIII': 'the thirteenth', 'XIV': 'the fourteenth',
+            'XV': 'the fifteenth', 'XVI': 'the sixteenth', 'XVII': 'the seventeenth',
+            'XVIII': 'the eighteenth', 'XIX': 'the nineteenth', 'XX': 'the twentieth'
+        }
+        
+        # Replace Roman numerals in context (World War II, etc.)
+        for roman, spoken in roman_numerals.items():
+            # Match Roman numeral when it's a standalone word or at word boundaries
+            pattern = r'\b' + re.escape(roman) + r'\b'
+            text = re.sub(pattern, spoken, text, flags=re.IGNORECASE)
+        
         # Handle currency (do before large number processing)
         text = re.sub(r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)', r'\1 dollars', text)
         
@@ -355,18 +370,35 @@ class ChatTTSSpeechGenerator:
         return text
 
     def _split_text_for_tts(self, text: str, max_length: int = 150) -> List[str]:
-        """Split long text into chunks suitable for TTS processing."""
-        # Split by sentences
-        sentences = text.replace('. ', '.|').replace('! ', '!|').replace('? ', '?|').split('|')
+        """Split long text into chunks suitable for TTS processing with natural sentence boundaries."""
+        import re
+        
+        # Enhanced sentence splitting with better boundary detection
+        # Split on sentence endings followed by space and capital letter or end of string
+        sentence_pattern = r'([.!?]+)\s+(?=[A-Z]|$)'
+        sentences = re.split(sentence_pattern, text)
+        
+        # Reconstruct sentences by combining text with their punctuation
+        clean_sentences = []
+        for i in range(0, len(sentences), 2):
+            if i < len(sentences):
+                sentence = sentences[i]
+                if i + 1 < len(sentences):
+                    sentence += sentences[i + 1]  # Add punctuation back
+                clean_sentences.append(sentence.strip())
+        
+        # Remove empty sentences
+        clean_sentences = [s for s in clean_sentences if s]
+        
+        # If no sentences found, fallback to original splitting
+        if not clean_sentences:
+            sentences = text.replace('. ', '.|').replace('! ', '!|').replace('? ', '?|').split('|')
+            clean_sentences = [s.strip() for s in sentences if s.strip()]
         
         chunks = []
         current_chunk = ""
         
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-                
+        for sentence in clean_sentences:
             # If adding this sentence would exceed max_length, start new chunk
             if current_chunk and len(current_chunk) + len(sentence) + 1 > max_length:
                 chunks.append(current_chunk.strip())

@@ -6,3 +6,4 @@ CLAUDE.md
 *_output/
 moneytree.egg-info/
 __pycache__/
+.aider*

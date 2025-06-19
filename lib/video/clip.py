@@ -45,7 +45,7 @@ class CaptionStyle:
     position: str = 'center'  # 'top', 'center', 'bottom'
     max_width: int = 80  # Percentage of video width
     words_per_caption: int = 6
-    font_family: str = None  # Use system default font instead of Arial
+    font_family: str = None
     stroke_color: str = 'black'
     stroke_width: int = 2
     
@@ -512,6 +512,16 @@ class VideoClip:
         return caption_clips
     
     
+    def _has_descenders(self, text: str) -> bool:
+        """Check if text contains characters with descenders."""
+        descender_chars = set('gjpqy')  # Characters that extend below the baseline
+        return any(char.lower() in descender_chars for char in text)
+    
+    def _count_descenders(self, text: str) -> int:
+        """Count the number of descender characters in text."""
+        descender_chars = set('gjpqy')
+        return sum(1 for char in text.lower() if char in descender_chars)
+    
     def _get_consistent_font(self, style: CaptionStyle):
         """Get a consistent font object with proper caching and fallback handling."""
         if not hasattr(self, '_font_cache'):
@@ -533,11 +543,17 @@ class VideoClip:
             except Exception as e:
                 logger.warning(f"Failed to load font '{style.font_family}': {e}")
         
-        # Try common system fonts as fallback
+        # Try standard system fonts as fallback
         if font is None:
             fallback_fonts = [
+                # Common bold sans-serif fonts
+                "DejaVuSans-Bold.ttf",
+                "LiberationSans-Bold.ttf", 
+                "NotoSans-Bold.ttf",
+                "Arial-Bold.ttf",
+                "arial-bold.ttf",
+                # Standard fallbacks
                 "DejaVuSans.ttf",
-                "DejaVuSans-Bold.ttf", 
                 "Arial.ttf",
                 "arial.ttf",
                 "LiberationSans-Regular.ttf",
@@ -566,8 +582,8 @@ class VideoClip:
         self._font_cache[cache_key] = font
         return font
 
-    def _measure_text_dimensions(self, text: str, style: CaptionStyle) -> tuple:
-        """Measure actual pixel dimensions of rendered text using PIL with improved consistency."""
+    def _measure_text_dimensions_with_descenders(self, text: str, style: CaptionStyle) -> tuple:
+        """Measure text dimensions accounting for full typographic height including descenders."""
         try:
             # Create a dummy image to measure text
             dummy_img = Image.new('RGB', (1, 1))
@@ -577,38 +593,65 @@ class VideoClip:
             font = self._get_consistent_font(style)
             
             if font is not None:
-                # Get bounding box of the text
+                # Get font metrics for proper typographic measurement
+                try:
+                    # Try to get font metrics directly
+                    ascent, descent = font.getmetrics()
+                    font_height = ascent + descent
+                except:
+                    # Fallback if getmetrics() is not available
+                    # Use a string with ascenders and descenders to measure full height
+                    test_string = "Ágjpqy|"  # Contains ascenders, descenders, and tall characters
+                    test_bbox = draw.textbbox((0, 0), test_string, font=font)
+                    font_height = test_bbox[3] - test_bbox[1]
+                
+                # Get actual text bounding box for width
                 bbox = draw.textbbox((0, 0), text, font=font)
-                width = bbox[2] - bbox[0]
-                height = bbox[3] - bbox[1]
+                text_width = bbox[2] - bbox[0]
+                
+                # Calculate number of lines
+                lines = text.count('\n') + 1
+                
+                # Use font height for each line (this includes descender space)
+                total_height = font_height * lines
                 
                 # Add stroke width to dimensions if present
                 if style.stroke_width > 0:
-                    width += style.stroke_width * 2
-                    height += style.stroke_width * 2
+                    text_width += style.stroke_width * 2
+                    total_height += style.stroke_width * 2
                 
-                # Add small padding to account for font rendering variations
-                width += 4
-                height += 2
+                # Add extra padding for descender safety
+                descender_padding = max(6, int(style.font_size * 0.2))  # 20% of font size or 6px minimum
+                text_width += 4  # Horizontal padding
+                total_height += descender_padding  # Extra vertical padding for descenders
                 
-                return (width, height)
+                logger.debug(f"Text measurement with descenders: '{text[:20]}...' → {text_width}x{total_height} (font_height: {font_height}, lines: {lines})")
+                return (int(text_width), int(total_height))
             else:
                 raise Exception("No font available")
                 
         except Exception as e:
-            logger.warning(f"Text measurement failed, using enhanced fallback: {e}")
-            # Enhanced fallback with better estimates
+            logger.warning(f"Descender-aware text measurement failed, using enhanced fallback: {e}")
+            # Enhanced fallback with better estimates including descender space
             lines = text.count('\n') + 1
             chars_per_line = max(len(line) for line in text.split('\n')) if text.strip() else 0
             
             # More accurate character width estimation based on font size
             char_width = style.font_size * 0.6  # Average character width ratio
-            line_height = style.font_size * 1.4  # More realistic line height
+            line_height = style.font_size * 1.5  # Increased line height to account for descenders
             
             estimated_width = chars_per_line * char_width + style.stroke_width * 2
             estimated_height = lines * line_height + style.stroke_width * 2
             
+            # Add extra descender padding
+            descender_padding = max(6, int(style.font_size * 0.2))
+            estimated_height += descender_padding
+            
             return (int(estimated_width), int(estimated_height))
+
+    def _measure_text_dimensions(self, text: str, style: CaptionStyle) -> tuple:
+        """Legacy wrapper - now uses descender-aware measurement."""
+        return self._measure_text_dimensions_with_descenders(text, style)
 
     def _wrap_text_for_display_pixel_based(self, text: str, style: CaptionStyle, max_width: int) -> str:
         """Wrap text based on actual pixel width with 10% safety margin and overflow detection."""
@@ -646,7 +689,7 @@ class VideoClip:
         
         final_text = '\n'.join(lines[:2])  # Still limit to 2 lines
         
-        # Text overflow detection and warnings
+        # Enhanced text overflow detection with descender awareness
         if len(lines) > 2:
             dropped_lines = lines[2:]
             logger.warning(f"Caption overflow: {len(dropped_lines)} lines dropped from '{original_text[:30]}...'")
@@ -659,6 +702,11 @@ class VideoClip:
         # Check if final text is significantly shorter than original
         if len(final_text.replace('\n', ' ')) < len(original_text) * 0.7:
             logger.warning(f"Significant text loss in caption: {len(final_text)}/{len(original_text)} chars retained")
+        
+        # Check for descender content and provide specific warnings
+        if self._has_descenders(final_text):
+            descender_count = self._count_descenders(final_text)
+            logger.debug(f"Caption contains {descender_count} descender characters: '{final_text[:30]}...'")
             
         return final_text
 
@@ -685,8 +733,8 @@ class VideoClip:
             # Detect edges using Canny edge detection
             edges = cv2.Canny(gray, 50, 150)
             
-            # Calculate text dimensions
-            text_width, text_height = self._measure_text_dimensions(text, style)
+            # Calculate text dimensions (including descender space)
+            text_width, text_height = self._measure_text_dimensions_with_descenders(text, style)
             
             # Define candidate positions based on style preference
             candidates = []
@@ -761,15 +809,18 @@ class VideoClip:
             logger.warning(f"Computer vision positioning failed, using safe fallback: {e}")
             return self._calculate_safe_position(text, style, video_width, video_height)
 
-    def _calculate_safe_position(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
-        """Calculate text position with increased margins and safety padding."""
+    def _calculate_safe_position_with_descenders(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
+        """Calculate text position with proper descender clearance and enhanced safety margins."""
         
-        # Measure actual text dimensions
-        text_width, text_height = self._measure_text_dimensions(text, style)
+        # Measure actual text dimensions (now includes descender space)
+        text_width, text_height = self._measure_text_dimensions_with_descenders(text, style)
         
-        # Define increased margins (15% of video dimensions) + 20px buffer
-        margin_x = int(video_width * 0.15) + 20
-        margin_y = int(video_height * 0.15) + 20
+        # Calculate extra descender clearance based on font size
+        descender_clearance = max(8, int(style.font_size * 0.25))  # 25% of font size or 8px minimum
+        
+        # Define increased margins (15% of video dimensions) + 25px buffer (increased)
+        margin_x = int(video_width * 0.15) + 25
+        margin_y = int(video_height * 0.15) + 25
         
         # Calculate safe boundaries with extra padding
         safe_left = margin_x
@@ -777,27 +828,44 @@ class VideoClip:
         safe_top = margin_y  
         safe_bottom = video_height - margin_y
         
-        # Add extra safety padding for text positioning
-        safety_padding = 30  # Additional pixels for safety
+        # Enhanced safety padding specifically for descenders
+        base_safety_padding = 35  # Increased base padding
+        descender_safety_padding = base_safety_padding + descender_clearance
         
         # Calculate position based on style, but within safe boundaries
         if style.position == 'bottom':
-            # Position text so bottom edge is at safe_bottom with extra padding
-            y_pos = safe_bottom - text_height - safety_padding
+            # Position text so bottom edge (including descenders) is well within safe area
+            y_pos = safe_bottom - text_height - descender_safety_padding
+            logger.debug(f"Bottom positioning: safe_bottom={safe_bottom}, text_height={text_height}, padding={descender_safety_padding} → y_pos={y_pos}")
         elif style.position == 'top':
-            # Position text so top edge is at safe_top with extra padding
-            y_pos = safe_top + safety_padding
+            # Position text so top edge is at safe_top with extra padding  
+            y_pos = safe_top + base_safety_padding
+            logger.debug(f"Top positioning: safe_top={safe_top}, padding={base_safety_padding} → y_pos={y_pos}")
         else:  # center
-            # Center vertically within safe area
-            y_pos = (safe_top + safe_bottom - text_height) // 2
+            # Center vertically within safe area, accounting for descender space
+            available_height = safe_bottom - safe_top - (2 * base_safety_padding)
+            y_pos = safe_top + base_safety_padding + (available_height - text_height) // 2
+            logger.debug(f"Center positioning: available_height={available_height} → y_pos={y_pos}")
         
         # Ensure text doesn't go outside safe boundaries with additional checks
-        y_pos = max(safe_top + safety_padding, min(y_pos, safe_bottom - text_height - safety_padding))
+        min_y = safe_top + base_safety_padding
+        max_y = safe_bottom - text_height - descender_safety_padding
+        y_pos = max(min_y, min(y_pos, max_y))
+        
+        # Additional validation - ensure we don't go beyond video boundaries
+        absolute_min_y = 10  # Never position text in top 10 pixels
+        absolute_max_y = video_height - text_height - 10  # Never let descenders go beyond bottom 10 pixels
+        y_pos = max(absolute_min_y, min(y_pos, absolute_max_y))
         
         # X position - always center horizontally
         x_pos = 'center'
         
+        logger.debug(f"Final position for '{text[:30]}...': ({x_pos}, {y_pos}) with text_height={text_height}")
         return (x_pos, y_pos)
+
+    def _calculate_safe_position(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
+        """Legacy wrapper - now uses descender-aware positioning."""
+        return self._calculate_safe_position_with_descenders(text, style, video_width, video_height)
 
     def _wrap_text_for_display(self, text: str, style: CaptionStyle) -> str:
         """Wrap text appropriately for video display."""

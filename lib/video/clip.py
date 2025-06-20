@@ -232,15 +232,17 @@ class VideoClip:
         self, 
         text: str, 
         audio_path: str, 
-        style: Optional[CaptionStyle] = None
+        style: Optional[CaptionStyle] = None,
+        use_whisper: bool = True
     ) -> Dict[str, Any]:
         """
         Add synchronized captions based on audio timing.
         
         Args:
-            text: The text content to display as captions
+            text: The text content to display as captions (fallback if Whisper fails)
             audio_path: Path to the audio file for timing synchronization
             style: Caption styling options
+            use_whisper: Whether to use Whisper for caption generation
             
         Returns:
             Dictionary with caption generation results
@@ -249,12 +251,21 @@ class VideoClip:
             style = self.caption_style
             
         try:
-            # Load audio for timing analysis
             logger.info("🎬 Creating synchronized captions...")
             audio_clip = AudioFileClip(audio_path)
             
-            # Analyze audio for speech timing
-            timing_data = self._analyze_speech_timing(audio_path, text)
+            # Try Whisper-based caption generation first
+            if use_whisper:
+                timing_data = self._generate_whisper_captions(audio_path, style)
+                timing_method = "whisper_asr"
+            else:
+                timing_data = []
+            
+            # Fallback to speech analysis if Whisper fails
+            if not timing_data:
+                logger.info("Falling back to speech timing analysis...")
+                timing_data = self._analyze_speech_timing(audio_path, text)
+                timing_method = "speech_analysis"
             
             # Get target dimensions from the template video
             target_resolution = self.video_config.get_target_resolution()
@@ -271,7 +282,8 @@ class VideoClip:
                 "caption_count": len(caption_clips),
                 "total_duration": audio_clip.duration,
                 "dimensions": target_resolution,
-                "timing_method": "speech_analysis"
+                "timing_method": timing_method,
+                "whisper_used": use_whisper and timing_method == "whisper_asr"
             }
             
         except Exception as e:
@@ -376,6 +388,105 @@ class VideoClip:
             segments.append((start_time, times[-1]))
         
         return segments
+    
+    def _generate_whisper_captions(self, audio_path: str, style: CaptionStyle) -> List[Dict[str, Any]]:
+        """
+        Generate captions using Whisper ASR for precise timing.
+        
+        Args:
+            audio_path: Path to audio file
+            style: Caption styling options
+            
+        Returns:
+            List of timing data generated from Whisper transcription
+        """
+        try:
+            from lib.video.whisper_captions import WhisperCaptionGenerator, WhisperConfig
+            
+            # Configure Whisper for optimal caption generation
+            whisper_config = WhisperConfig(
+                model_size="base",  # Good balance of speed/accuracy
+                language="en",
+                temperature=0.0,    # Deterministic results
+                word_timestamps=True,
+                verbose=False
+            )
+            
+            # Initialize Whisper generator
+            generator = WhisperCaptionGenerator(whisper_config)
+            
+            # Calculate optimal caption parameters based on style
+            max_caption_length = self._calculate_max_caption_length(style)
+            caption_duration = self._calculate_optimal_caption_duration(style)
+            
+            # Generate captions from audio
+            logger.info(f"🎤 Generating Whisper captions (max_length={max_caption_length}, duration={caption_duration:.1f}s)")
+            caption_segments = generator.generate_captions_from_audio(
+                audio_path, 
+                max_caption_length=max_caption_length,
+                caption_duration=caption_duration
+            )
+            
+            if not caption_segments:
+                logger.warning("Whisper failed to generate captions")
+                return []
+            
+            # Adjust timing for readability
+            adjusted_segments = generator.adjust_caption_timing(
+                caption_segments,
+                min_duration=1.0,
+                max_duration=5.0
+            )
+            
+            # Convert to MoviePy format
+            timing_data = generator.generate_moviepy_timing_data(adjusted_segments)
+            
+            # Log statistics
+            stats = generator.get_caption_statistics(adjusted_segments)
+            logger.info(f"✅ Whisper generated {stats['caption_count']} captions")
+            logger.info(f"   Average duration: {stats['average_duration']:.1f}s")
+            logger.info(f"   Average confidence: {stats['average_confidence']:.3f}")
+            logger.info(f"   Words per minute: {stats['words_per_minute']:.0f}")
+            
+            return timing_data
+            
+        except ImportError:
+            logger.warning("Whisper not available - install with: uv add openai-whisper")
+            return []
+        except Exception as e:
+            logger.warning(f"Whisper caption generation failed: {e}")
+            return []
+    
+    def _calculate_max_caption_length(self, style: CaptionStyle) -> int:
+        """Calculate maximum caption length based on style and video dimensions."""
+        # Base calculation on position and screen space
+        if style.position == 'center':
+            base_length = 60  # More space in center
+        elif style.position == 'top':
+            base_length = 50  # Conservative for top
+        else:  # bottom
+            base_length = 55  # Standard for bottom
+        
+        # Adjust based on font size
+        if style.font_size <= 24:
+            return int(base_length * 1.2)  # Smaller font = more text
+        elif style.font_size >= 48:
+            return int(base_length * 0.8)  # Larger font = less text
+        else:
+            return base_length
+    
+    def _calculate_optimal_caption_duration(self, style: CaptionStyle) -> float:
+        """Calculate optimal caption duration based on reading speed and style."""
+        # Base duration based on reading speed (average 200 words per minute)
+        base_duration = 3.0  # seconds
+        
+        # Adjust based on position (center captions can be shorter)
+        if style.position == 'center':
+            return base_duration * 0.9  # 10% shorter
+        elif style.position == 'top':
+            return base_duration * 1.1  # 10% longer (harder to read)
+        else:
+            return base_duration  # Standard duration
     
     def _create_uniform_timing(self, text: str) -> List[Dict[str, Any]]:
         """Create uniform caption timing as fallback."""

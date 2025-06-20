@@ -47,6 +47,8 @@ def main():
                        help='Disable pipeline optimizations (for debugging)')
     parser.add_argument('--buffer-factor', type=float, default=1.15,
                        help='Buffer factor for early media trimming (default: 1.15 = 15% buffer)')
+    parser.add_argument('--use-whisper', action='store_true',
+                       help='Use Whisper ASR for audio-synchronized captions (fallback to speech analysis if fails)')
     
     args = parser.parse_args()
     
@@ -272,7 +274,8 @@ def main():
                 caption_result = video_clip.add_synchronized_captions(
                     caption_text, 
                     audio_path, 
-                    caption_style
+                    caption_style,
+                    use_whisper=args.use_whisper
                 )
                 if caption_result['success']:
                     logger.info(f"Captions added: {caption_result['caption_count']} segments")

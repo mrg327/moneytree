@@ -79,6 +79,10 @@ class AudioPostProcessor:
                     enhanced_audio = self.remove_dc_offset(enhanced_audio)
                 elif fix == 'smooth_volume':
                     enhanced_audio = self.smooth_volume_changes(enhanced_audio, sr)
+                elif fix == 'fix_clipping':
+                    enhanced_audio = self.fix_audio_clipping(enhanced_audio)
+                elif fix == 'fix_tts_syllable_artifacts':
+                    enhanced_audio = self.fix_tts_syllable_artifacts(enhanced_audio)
                 else:
                     logger.warning(f"Unknown fix: {fix}")
             
@@ -180,21 +184,24 @@ class AudioPostProcessor:
     
     def apply_noise_reduction(self, audio_data: np.ndarray) -> np.ndarray:
         """
-        Apply gentle noise reduction to improve audio quality.
+        Apply gentle noise reduction with click removal to improve audio quality.
         
         Args:
             audio_data: Input audio array
             
         Returns:
-            Noise-reduced audio array
+            Noise-reduced audio array with clicks removed
         """
         if not HAS_AUDIO_LIBS or len(audio_data) == 0:
             return audio_data
         
         try:
-            # Simple spectral subtraction approach
+            # Step 1: Remove clicks and pops first
+            click_free_audio = self._remove_clicks_with_gentle_gate(audio_data)
+            
+            # Step 2: Apply traditional noise reduction
             # Get noise profile from quiet sections
-            rms = np.sqrt(np.convolve(audio_data**2, np.ones(1024)/1024, mode='same'))
+            rms = np.sqrt(np.convolve(click_free_audio**2, np.ones(1024)/1024, mode='same'))
             noise_threshold = np.percentile(rms, 20)  # Bottom 20% as noise estimate
             
             # Apply gentle high-pass filter to remove low-frequency noise
@@ -205,19 +212,341 @@ class AudioPostProcessor:
                 normal_cutoff = cutoff / nyquist
                 
                 b, a = scipy.signal.butter(2, normal_cutoff, btype='high')
-                filtered_audio = scipy.signal.filtfilt(b, a, audio_data)
+                filtered_audio = scipy.signal.filtfilt(b, a, click_free_audio)
                 
                 # Gentle noise gate
                 noise_gate = np.where(rms > noise_threshold, 1.0, self.noise_reduction_factor)
                 enhanced_audio = filtered_audio * noise_gate
                 
-                logger.debug("Applied noise reduction filter")
+                logger.debug("Applied noise reduction with click removal")
                 return enhanced_audio
             else:
-                return audio_data
+                return click_free_audio
                 
         except Exception as e:
             logger.warning(f"Failed to apply noise reduction: {e}")
+            return audio_data
+    
+    def _remove_clicks_with_gentle_gate(self, audio_data: np.ndarray) -> np.ndarray:
+        """
+        Remove clicks and pops using a gentle gating approach.
+        
+        This method detects sudden amplitude spikes and applies gentle smoothing
+        to remove clicking sounds without affecting speech quality.
+        
+        Args:
+            audio_data: Input audio array
+            
+        Returns:
+            Audio with clicks removed
+        """
+        if len(audio_data) == 0:
+            return audio_data
+        
+        try:
+            # Calculate differences to detect sudden changes (clicks)
+            diff = np.diff(audio_data)
+            
+            # Create a gentle rolling window for analysis
+            window_size = 32  # Small window for click detection
+            
+            # Calculate rolling standard deviation of differences
+            diff_padded = np.pad(diff, (window_size//2, window_size//2), mode='edge')
+            diff_std = np.array([
+                np.std(diff_padded[i:i+window_size]) 
+                for i in range(len(diff))
+            ])
+            
+            # Adaptive threshold based on overall audio characteristics
+            median_std = np.median(diff_std)
+            click_threshold = median_std * 4.0  # 4x median as threshold
+            
+            # Find potential clicks
+            click_mask = np.abs(diff) > click_threshold
+            click_indices = np.where(click_mask)[0]
+            
+            if len(click_indices) == 0:
+                logger.debug("No clicks detected")
+                return audio_data
+            
+            logger.debug(f"Found {len(click_indices)} potential clicks to smooth")
+            
+            # Apply gentle smoothing to click regions
+            result = audio_data.copy()
+            
+            for click_idx in click_indices:
+                # Define a small smoothing window around the click
+                smooth_radius = 8  # 8 samples on each side
+                start_idx = max(0, click_idx - smooth_radius)
+                end_idx = min(len(result), click_idx + smooth_radius + 1)
+                
+                if end_idx - start_idx > 3:  # Need at least 3 samples
+                    # Get the region to smooth
+                    region = result[start_idx:end_idx].copy()
+                    
+                    # Apply gentle smoothing using a simple moving average
+                    smoothed_region = self._apply_gentle_smoothing(region)
+                    
+                    # Blend smoothed region back with gentle fade
+                    blend_factor = 0.7  # 70% smoothed, 30% original
+                    result[start_idx:end_idx] = (
+                        region * (1 - blend_factor) + 
+                        smoothed_region * blend_factor
+                    )
+            
+            logger.debug(f"Applied gentle click removal to {len(click_indices)} regions")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Click removal failed: {e}")
+            return audio_data
+    
+    def _apply_gentle_smoothing(self, audio_region: np.ndarray) -> np.ndarray:
+        """
+        Apply gentle smoothing to a small audio region.
+        
+        Args:
+            audio_region: Small audio segment to smooth
+            
+        Returns:
+            Gently smoothed audio segment
+        """
+        if len(audio_region) < 3:
+            return audio_region
+        
+        try:
+            # Simple moving average with edge preservation
+            smoothed = audio_region.copy()
+            
+            # Apply a 3-point moving average to the middle samples
+            for i in range(1, len(audio_region) - 1):
+                smoothed[i] = (audio_region[i-1] + audio_region[i] + audio_region[i+1]) / 3.0
+            
+            # Preserve the first and last samples to avoid boundary artifacts
+            # This maintains the overall energy and prevents new clicks at boundaries
+            
+            return smoothed
+            
+        except Exception as e:
+            logger.warning(f"Gentle smoothing failed: {e}")
+            return audio_region
+    
+    def fix_audio_clipping(self, audio_data: np.ndarray) -> np.ndarray:
+        """
+        Fix audio clipping by applying soft limiting and compression.
+        
+        Args:
+            audio_data: Input audio array
+            
+        Returns:
+            Audio with clipping artifacts removed
+        """
+        if len(audio_data) == 0:
+            return audio_data
+        
+        try:
+            result = audio_data.copy()
+            
+            # Step 1: Detect clipped regions
+            clipping_threshold = 0.95  # 95% of max amplitude
+            clipped_samples = np.abs(result) >= clipping_threshold
+            
+            if np.any(clipped_samples):
+                clipped_count = np.sum(clipped_samples)
+                logger.debug(f"Found {clipped_count} clipped samples ({clipped_count/len(result)*100:.1f}%)")
+                
+                # Step 2: Apply gentle compression to prevent further clipping
+                # Use soft knee compression
+                compression_ratio = 0.3  # Gentle compression
+                threshold = 0.7  # Start compressing at 70%
+                
+                # Calculate compression
+                abs_audio = np.abs(result)
+                over_threshold = abs_audio > threshold
+                
+                if np.any(over_threshold):
+                    # Apply soft compression to loud parts
+                    compressed_magnitude = threshold + (abs_audio - threshold) * compression_ratio
+                    compressed_magnitude = np.where(over_threshold, compressed_magnitude, abs_audio)
+                    
+                    # Maintain original sign
+                    result = np.sign(result) * compressed_magnitude
+                
+                # Step 3: Apply soft limiting to clipped regions
+                for i in range(len(clipped_samples)):
+                    if clipped_samples[i]:
+                        # Apply soft limiting with surrounding context
+                        window_start = max(0, i - 4)
+                        window_end = min(len(result), i + 5)
+                        
+                        # Calculate target value based on surrounding samples
+                        surrounding = result[window_start:window_end]
+                        non_clipped = surrounding[np.abs(surrounding) < clipping_threshold]
+                        
+                        if len(non_clipped) > 0:
+                            # Use median of non-clipped surrounding samples
+                            target = np.median(non_clipped) * np.sign(result[i])
+                            # Blend with a soft transition
+                            result[i] = result[i] * 0.3 + target * 0.7
+                        else:
+                            # Fallback: reduce amplitude
+                            result[i] *= 0.8
+                
+                # Step 4: Final normalization to prevent new clipping
+                max_amplitude = np.max(np.abs(result))
+                if max_amplitude > 0.9:
+                    result *= 0.85 / max_amplitude
+                
+                logger.debug("Applied clipping repair with soft limiting")
+            else:
+                logger.debug("No clipping detected")
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Clipping fix failed: {e}")
+            return audio_data
+    
+    def fix_tts_syllable_artifacts(self, audio_data: np.ndarray) -> np.ndarray:
+        """
+        Fix TTS-specific syllable artifacts like weird pronunciations and uncomfortable sounds.
+        
+        Args:
+            audio_data: Input audio array
+            
+        Returns:
+            Audio with TTS syllable artifacts smoothed
+        """
+        if not HAS_AUDIO_LIBS or len(audio_data) == 0:
+            return audio_data
+        
+        try:
+            # Step 1: Detect unnatural frequency spikes (robotic artifacts)
+            result = self._smooth_frequency_spikes(audio_data)
+            
+            # Step 2: Fix volume inconsistencies within syllables
+            result = self._smooth_syllable_volumes(result)
+            
+            # Step 3: Remove harsh consonant artifacts
+            result = self._soften_harsh_consonants(result)
+            
+            logger.debug("Applied TTS syllable artifact fixes")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"TTS syllable artifact fix failed: {e}")
+            return audio_data
+    
+    def _smooth_frequency_spikes(self, audio_data: np.ndarray) -> np.ndarray:
+        """Smooth unnatural frequency spikes that create robotic sounds."""
+        try:
+            if not HAS_AUDIO_LIBS:
+                return audio_data
+            
+            # Apply gentle low-pass filtering to reduce harsh high frequencies
+            nyquist = self.sample_rate / 2
+            cutoff = 6000  # 6kHz cutoff to remove harsh artifacts
+            
+            if cutoff < nyquist:
+                normal_cutoff = cutoff / nyquist
+                b, a = scipy.signal.butter(2, normal_cutoff, btype='low')
+                smoothed = scipy.signal.filtfilt(b, a, audio_data)
+                
+                # Blend with original to preserve speech clarity
+                blend_factor = 0.3  # 30% smoothed, 70% original
+                result = audio_data * (1 - blend_factor) + smoothed * blend_factor
+                
+                logger.debug("Applied frequency spike smoothing")
+                return result
+            
+            return audio_data
+            
+        except Exception as e:
+            logger.warning(f"Frequency spike smoothing failed: {e}")
+            return audio_data
+    
+    def _smooth_syllable_volumes(self, audio_data: np.ndarray) -> np.ndarray:
+        """Smooth volume inconsistencies within syllables."""
+        try:
+            # Use shorter windows to target syllable-level variations
+            window_size = self.sample_rate // 50  # 20ms windows for syllable analysis
+            
+            if window_size >= len(audio_data):
+                return audio_data
+            
+            # Calculate envelope
+            envelope = []
+            for i in range(0, len(audio_data) - window_size, window_size // 2):
+                window = audio_data[i:i + window_size]
+                envelope.append(np.sqrt(np.mean(window ** 2)))
+            
+            if len(envelope) < 3:
+                return audio_data
+            
+            # Smooth the envelope to remove sudden changes
+            if HAS_AUDIO_LIBS:
+                smoothed_envelope = scipy.signal.savgol_filter(envelope, min(len(envelope), 5), 2)
+            else:
+                # Simple moving average fallback
+                smoothed_envelope = np.convolve(envelope, np.ones(3)/3, mode='same')
+            
+            # Apply smoothed envelope
+            result = audio_data.copy()
+            for i, (orig_rms, smooth_rms) in enumerate(zip(envelope, smoothed_envelope)):
+                start_idx = i * (window_size // 2)
+                end_idx = min(start_idx + window_size, len(result))
+                
+                if orig_rms > 0:
+                    adjustment = smooth_rms / orig_rms
+                    # Limit adjustment to prevent artifacts
+                    adjustment = np.clip(adjustment, 0.7, 1.4)
+                    result[start_idx:end_idx] *= adjustment
+            
+            logger.debug("Applied syllable volume smoothing")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Syllable volume smoothing failed: {e}")
+            return audio_data
+    
+    def _soften_harsh_consonants(self, audio_data: np.ndarray) -> np.ndarray:
+        """Soften harsh consonant sounds that can be uncomfortable."""
+        try:
+            # Detect high-energy, short-duration events (harsh consonants)
+            window_size = 64  # Very small window for consonant detection
+            
+            energy = []
+            for i in range(0, len(audio_data) - window_size, window_size):
+                window = audio_data[i:i + window_size]
+                energy.append(np.sum(window ** 2))
+            
+            if len(energy) < 2:
+                return audio_data
+            
+            # Find high-energy spikes
+            median_energy = np.median(energy)
+            harsh_threshold = median_energy * 8  # 8x median energy
+            
+            result = audio_data.copy()
+            
+            for i, window_energy in enumerate(energy):
+                if window_energy > harsh_threshold:
+                    # Soften this region
+                    start_idx = i * window_size
+                    end_idx = min(start_idx + window_size, len(result))
+                    
+                    # Apply gentle compression to harsh region
+                    region = result[start_idx:end_idx]
+                    softened = region * 0.8  # Reduce by 20%
+                    
+                    # Smooth transition
+                    result[start_idx:end_idx] = softened
+            
+            logger.debug("Applied harsh consonant softening")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Harsh consonant softening failed: {e}")
             return audio_data
     
     def add_natural_pauses(self, audio_data: np.ndarray, 

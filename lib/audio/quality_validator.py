@@ -464,6 +464,8 @@ class AudioQualityValidator:
         if clipping_analysis['detected']:
             needs_processing = True
             recommended_fixes.append('fix_clipping')
+            # Also recommend syllable artifact fixes for TTS audio
+            recommended_fixes.append('fix_tts_syllable_artifacts')
         
         # Check dynamic range
         if dynamic_range < self.min_dynamic_range_db:

@@ -19,6 +19,7 @@ dependencies = [
     "yt-dlp>=2025.6.9",
     "opencv-python>=4.11.0.86",
     "pytesseract>=0.3.13",
+    "openai-whisper>=20231117",
 ]
 
 [project.optional-dependencies]

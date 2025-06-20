@@ -1,0 +1,6 @@
+Hello, my name is [Your Name]. I'm creating a voice reference for text-to-speech generation.
+This recording will be used to clone my voice using artificial intelligence.
+The quick brown fox jumps over the lazy dog. 
+I enjoy reading books and learning about new technologies.
+This should provide enough speech data for accurate voice cloning.
+Thank you for listening to this voice sample.

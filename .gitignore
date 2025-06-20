@@ -7,3 +7,4 @@ CLAUDE.md
 moneytree.egg-info/
 __pycache__/
 .aider*
+sample_voices/

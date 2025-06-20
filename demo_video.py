@@ -33,7 +33,7 @@ def main():
                        help='TTS engine to use')
     parser.add_argument('--voice', choices=['natural', 'conversational', 'expressive', 'calm', 'consistent', 'high_quality'],
                        default='natural', help='ChatTTS voice style')
-    parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny'],
+    parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny', 'xtts_v2'],
                        default='tacotron2', help='Coqui TTS model')
     parser.add_argument('--music', help='Path to background music file')
     parser.add_argument('--use-rule-based', action='store_true',
@@ -49,6 +49,8 @@ def main():
                        help='Buffer factor for early media trimming (default: 1.15 = 15% buffer)')
     parser.add_argument('--use-whisper', action='store_true',
                        help='Use Whisper ASR for audio-synchronized captions (fallback to speech analysis if fails)')
+    parser.add_argument('--clone-voice', help='Path to reference audio for voice cloning (6+ seconds)')
+    parser.add_argument('--language', default='en', help='Language for XTTS-v2 generation')
     
     args = parser.parse_args()
     
@@ -189,17 +191,37 @@ def main():
         else:
             logger.info("Using enhanced Coqui TTS for synthetic speech")
             
-            model_map = {
-                'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
-                'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
-                'vits': "tts_models/en/vctk/vits",
-                'jenny': "tts_models/en/jenny/jenny"
-            }
-            
-            tts_config = CoquiTTSConfig(
-                model_name=model_map[args.model],
-                device='cpu'
-            )
+            # Handle XTTS-v2 voice cloning
+            if args.model == 'xtts_v2' or args.clone_voice:
+                from lib.tts.coqui_speech_generator import create_voice_cloning_config
+                
+                if args.clone_voice:
+                    logger.info(f"Using XTTS-v2 with voice cloning from {Path(args.clone_voice).name}")
+                    tts_config = create_voice_cloning_config(
+                        reference_audio=args.clone_voice,
+                        language=args.language,
+                        gpu=False  # CPU for stability in pipeline
+                    )
+                else:
+                    logger.info("Using XTTS-v2 with default voice")
+                    tts_config = CoquiTTSConfig.for_xtts_v2(
+                        speaker_wav=None,
+                        language=args.language,
+                        gpu=False
+                    )
+            else:
+                # Traditional models
+                model_map = {
+                    'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
+                    'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
+                    'vits': "tts_models/en/vctk/vits",
+                    'jenny': "tts_models/en/jenny/jenny"
+                }
+                
+                tts_config = CoquiTTSConfig(
+                    model_name=model_map[args.model],
+                    device='cpu'
+                )
             
             speech_gen = CoquiSpeechGenerator(tts_config)
             

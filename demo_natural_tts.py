@@ -31,10 +31,16 @@ def main():
                        default='natural', help='ChatTTS voice style')
     
     # Coqui TTS options  
-    parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny'], 
+    parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny', 'xtts_v2'], 
                        default='tacotron2', help='Coqui TTS model')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cpu', 
                        help='Device to use for TTS')
+    
+    # Voice cloning options (XTTS-v2)
+    parser.add_argument('--clone-voice', help='Path to reference audio for voice cloning (6+ seconds)')
+    parser.add_argument('--language', default='en', help='Language for XTTS-v2 generation')
+    parser.add_argument('--analyze-reference', action='store_true',
+                       help='Analyze quality of reference audio before cloning')
     
     # Generation options
     parser.add_argument('--use-rule-based', action='store_true', 
@@ -149,20 +155,60 @@ def main():
     if args.engine in ['coqui', 'both']:
         print("\\n4️⃣ Generating traditional speech with Coqui TTS...")
         
-        # Configure Coqui TTS
-        model_map = {
-            'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
-            'fast_pitch': "tts_models/en/ljspeech/fast_pitch", 
-            'vits': "tts_models/en/vctk/vits",
-            'jenny': "tts_models/en/jenny/jenny"
-        }
+        # Handle voice cloning analysis first
+        if args.analyze_reference and args.clone_voice:
+            print(f"🔍 Analyzing reference audio quality...")
+            from lib.tts.voice_cloning import VoiceManager
+            
+            voice_manager = VoiceManager()
+            quality_report = voice_manager.analyze_voice_quality(args.clone_voice)
+            
+            print(f"📊 Quality Analysis:")
+            print(f"   Overall Score: {quality_report.overall_score:.3f}/1.000")
+            print(f"   Suitable for cloning: {'Yes' if quality_report.is_suitable else 'No'}")
+            
+            if quality_report.issues:
+                print(f"   Issues: {', '.join(quality_report.issues)}")
+            if quality_report.recommendations:
+                print(f"   Recommendations: {quality_report.recommendations[0]}")
         
-        coqui_config = CoquiTTSConfig(
-            model_name=model_map[args.model],
-            device=args.device,
-            sample_rate=22050,
-            output_format="wav"
-        )
+        # Configure Coqui TTS
+        if args.model == 'xtts_v2' or args.clone_voice:
+            # Use XTTS-v2 for voice cloning
+            from lib.tts.coqui_speech_generator import create_voice_cloning_config
+            
+            if args.clone_voice:
+                print(f"🎭 Using XTTS-v2 with voice cloning")
+                print(f"   Reference: {Path(args.clone_voice).name}")
+                print(f"   Language: {args.language}")
+                
+                coqui_config = create_voice_cloning_config(
+                    reference_audio=args.clone_voice,
+                    language=args.language,
+                    gpu=(args.device == 'cuda')
+                )
+            else:
+                print(f"🎭 Using XTTS-v2 with default voice")
+                coqui_config = CoquiTTSConfig.for_xtts_v2(
+                    speaker_wav=None,
+                    language=args.language,
+                    gpu=(args.device == 'cuda')
+                )
+        else:
+            # Use traditional models
+            model_map = {
+                'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
+                'fast_pitch': "tts_models/en/ljspeech/fast_pitch", 
+                'vits': "tts_models/en/vctk/vits",
+                'jenny': "tts_models/en/jenny/jenny"
+            }
+            
+            coqui_config = CoquiTTSConfig(
+                model_name=model_map[args.model],
+                device=args.device,
+                sample_rate=22050,
+                output_format="wav"
+            )
         
         coqui_gen = CoquiSpeechGenerator(coqui_config)
         

@@ -16,6 +16,15 @@ from lib.audio.post_processor import AudioPostProcessor
 try:
     from TTS.api import TTS
     HAS_TTS = True
+    
+    # PyTorch 2.6+ compatibility: Add safe globals for XTTS-v2
+    import torch
+    if hasattr(torch.serialization, 'add_safe_globals'):
+        try:
+            from TTS.tts.configs.xtts_config import XttsConfig
+            torch.serialization.add_safe_globals([XttsConfig])
+        except ImportError:
+            pass  # XttsConfig not available in this TTS version
 except ImportError:
     HAS_TTS = False
 
@@ -54,13 +63,15 @@ class CoquiTTSConfig:
         Returns:
             CoquiTTSConfig configured for XTTS-v2
         """
+        # Extract gpu parameter to avoid duplicate keyword argument
+        gpu = kwargs.pop("gpu", False)
         return cls(
             model_name="tts_models/multilingual/multi-dataset/xtts_v2",
             sample_rate=24000,  # XTTS-v2 uses 24kHz for higher quality
             use_xtts=True,
             speaker_wav=speaker_wav,
             language=language,
-            device="cuda" if kwargs.get("gpu", False) else "cpu",
+            device="cuda" if gpu else "cpu",
             **kwargs
         )
     

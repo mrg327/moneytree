@@ -28,6 +28,69 @@ class CoquiTTSConfig:
     sample_rate: int = 22050
     quality: str = "medium"  # low, medium, high
     device: str = "cpu"  # cpu or cuda
+    
+    # XTTS-v2 specific parameters
+    use_xtts: bool = False  # Enable XTTS-v2 voice cloning
+    speaker_wav: Optional[str] = None  # Reference audio for voice cloning (6+ seconds)
+    language: str = "en"  # Language code (en, es, fr, de, it, pt, pl, tr, ru, nl, cs, ar, zh-cn, ja, hu, ko)
+    gpt_cond_len: int = 3  # GPT conditioning length for voice cloning
+    temperature: float = 0.75  # Temperature for generation randomness
+    repetition_penalty: float = 5.0  # Penalty for repetitions
+    length_penalty: float = 1.0  # Penalty for length
+    speed: float = 1.0  # Speech speed multiplier
+    enable_streaming: bool = False  # Enable streaming generation
+    split_sentences: bool = True  # Split long text into sentences
+    
+    @classmethod
+    def for_xtts_v2(cls, speaker_wav: str, language: str = "en", **kwargs) -> 'CoquiTTSConfig':
+        """
+        Create configuration optimized for XTTS-v2 voice cloning.
+        
+        Args:
+            speaker_wav: Path to reference audio file (6+ seconds recommended)
+            language: Language code for generation
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            CoquiTTSConfig configured for XTTS-v2
+        """
+        return cls(
+            model_name="tts_models/multilingual/multi-dataset/xtts_v2",
+            sample_rate=24000,  # XTTS-v2 uses 24kHz for higher quality
+            use_xtts=True,
+            speaker_wav=speaker_wav,
+            language=language,
+            device="cuda" if kwargs.get("gpu", False) else "cpu",
+            **kwargs
+        )
+    
+    @classmethod
+    def for_popular_model(cls, model_preset: str = "best_quality", **kwargs) -> 'CoquiTTSConfig':
+        """
+        Create configuration for popular pre-trained models.
+        
+        Args:
+            model_preset: Model preset ('best_quality', 'fast', 'male_voice', 'female_voice')
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            CoquiTTSConfig for the specified preset
+        """
+        presets = {
+            "best_quality": "tts_models/en/ljspeech/fast_pitch",
+            "fast": "tts_models/en/ljspeech/tacotron2-DDC", 
+            "male_voice": "tts_models/en/vctk/vits",  # Use p230 speaker
+            "female_voice": "tts_models/en/jenny/jenny",
+            "multilingual": "tts_models/multilingual/multi-dataset/your_tts"
+        }
+        
+        model_name = presets.get(model_preset, presets["best_quality"])
+        
+        return cls(
+            model_name=model_name,
+            sample_rate=22050,
+            **kwargs
+        )
 
 
 class CoquiSpeechGenerator:
@@ -54,7 +117,7 @@ class CoquiSpeechGenerator:
         self._initialize_tts()
     
     def _initialize_tts(self):
-        """Initialize the Coqui TTS engine."""
+        """Initialize the Coqui TTS engine with XTTS-v2 support."""
         if not HAS_TTS:
             print("❌ Coqui TTS not available. Install with: pip install TTS")
             return
@@ -64,6 +127,12 @@ class CoquiSpeechGenerator:
             print(f"   Model: {self.config.model_name}")
             print(f"   Device: {self.config.device}")
             
+            if self.config.use_xtts:
+                print(f"   XTTS-v2 Mode: Voice cloning enabled")
+                print(f"   Language: {self.config.language}")
+                if self.config.speaker_wav:
+                    print(f"   Reference audio: {Path(self.config.speaker_wav).name}")
+            
             # Initialize TTS with the specified model
             self.tts = TTS(
                 model_name=self.config.model_name,
@@ -71,12 +140,47 @@ class CoquiSpeechGenerator:
                 gpu=self.config.device == "cuda"
             )
             
+            # Validate speaker reference for XTTS-v2
+            if self.config.use_xtts and self.config.speaker_wav:
+                self._validate_speaker_reference()
+            
             print(f"✅ Coqui TTS initialized successfully")
             
         except Exception as e:
             print(f"❌ Failed to initialize Coqui TTS: {e}")
             print("💡 Try a different model or check internet connection for model download")
             self.tts = None
+    
+    def _validate_speaker_reference(self):
+        """Validate and optimize speaker reference audio for voice cloning."""
+        if not self.config.speaker_wav or not os.path.exists(self.config.speaker_wav):
+            print(f"⚠️ Warning: Speaker reference audio not found: {self.config.speaker_wav}")
+            return False
+        
+        try:
+            import librosa
+            
+            # Load and analyze the reference audio
+            audio, sr = librosa.load(self.config.speaker_wav, sr=None)
+            duration = len(audio) / sr
+            
+            print(f"📊 Speaker reference analysis:")
+            print(f"   Duration: {duration:.1f}s")
+            print(f"   Sample rate: {sr}Hz")
+            
+            # Validate duration (XTTS-v2 works best with 6+ seconds)
+            if duration < 3.0:
+                print(f"⚠️ Warning: Reference audio is short ({duration:.1f}s). Recommend 6+ seconds for best quality.")
+            elif duration >= 6.0:
+                print(f"✅ Reference audio duration is optimal ({duration:.1f}s)")
+            else:
+                print(f"⚡ Reference audio duration is acceptable ({duration:.1f}s)")
+                
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Could not analyze speaker reference: {e}")
+            return False
     
     def generate_speech_from_monologue(
         self, 
@@ -118,11 +222,15 @@ class CoquiSpeechGenerator:
         try:
             print(f"🎤 Generating high-quality speech: {output_path}")
             
-            # Use Coqui TTS to generate audio
-            self.tts.tts_to_file(
-                text=full_text,
-                file_path=str(output_path)
-            )
+            if self.config.use_xtts:
+                # Use XTTS-v2 with voice cloning
+                self._generate_xtts_speech(full_text, str(output_path))
+            else:
+                # Use traditional TTS models
+                self.tts.tts_to_file(
+                    text=full_text,
+                    file_path=str(output_path)
+                )
             
             # Check if file was created and perform quality validation
             if os.path.exists(output_path):
@@ -186,6 +294,108 @@ class CoquiSpeechGenerator:
                 
         except Exception as e:
             return self._fallback_response(f"Coqui TTS generation failed: {e}")
+    
+    def _generate_xtts_speech(self, text: str, output_path: str):
+        """
+        Generate speech using XTTS-v2 with voice cloning.
+        
+        Args:
+            text: Text to convert to speech
+            output_path: Path to save the generated audio
+        """
+        print(f"🎭 Using XTTS-v2 voice cloning...")
+        print(f"   Language: {self.config.language}")
+        print(f"   Temperature: {self.config.temperature}")
+        
+        try:
+            # XTTS-v2 generation parameters
+            generation_kwargs = {
+                "text": text,
+                "file_path": output_path,
+                "language": self.config.language,
+                "split_sentences": self.config.split_sentences
+            }
+            
+            # Add speaker reference for voice cloning
+            if self.config.speaker_wav and os.path.exists(self.config.speaker_wav):
+                generation_kwargs["speaker_wav"] = self.config.speaker_wav
+                print(f"   🎯 Cloning voice from: {Path(self.config.speaker_wav).name}")
+            else:
+                print(f"   🎤 Using default XTTS-v2 voice (no reference provided)")
+            
+            # Generate speech with XTTS-v2
+            self.tts.tts_to_file(**generation_kwargs)
+            
+            print(f"✅ XTTS-v2 generation complete")
+            
+        except Exception as e:
+            print(f"❌ XTTS-v2 generation failed: {e}")
+            print(f"💡 Falling back to default voice...")
+            
+            # Fallback to basic XTTS without speaker reference
+            try:
+                self.tts.tts_to_file(
+                    text=text,
+                    file_path=output_path,
+                    language=self.config.language
+                )
+                print(f"✅ Fallback generation successful")
+            except Exception as fallback_error:
+                raise Exception(f"Both XTTS-v2 and fallback failed: {fallback_error}")
+    
+    def clone_voice_from_audio(self, reference_audio: str, text: str, output_path: str, 
+                              language: str = "en") -> Dict[str, Any]:
+        """
+        Clone a voice from reference audio and generate speech.
+        
+        Args:
+            reference_audio: Path to reference audio file (6+ seconds recommended)
+            text: Text to convert to speech
+            output_path: Path to save the generated audio
+            language: Language code for generation
+            
+        Returns:
+            Dictionary with voice cloning results
+        """
+        if not self.config.use_xtts:
+            return {"success": False, "error": "XTTS-v2 not enabled in configuration"}
+        
+        if not os.path.exists(reference_audio):
+            return {"success": False, "error": f"Reference audio not found: {reference_audio}"}
+        
+        try:
+            print(f"🎭 Voice cloning with XTTS-v2...")
+            print(f"   Reference: {Path(reference_audio).name}")
+            print(f"   Target language: {language}")
+            
+            # Generate speech with voice cloning
+            self.tts.tts_to_file(
+                text=text,
+                speaker_wav=reference_audio,
+                language=language,
+                file_path=output_path,
+                split_sentences=self.config.split_sentences
+            )
+            
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                duration = self._get_actual_audio_duration(output_path)
+                
+                return {
+                    "success": True,
+                    "output_path": output_path,
+                    "file_size": file_size,
+                    "duration": duration,
+                    "language": language,
+                    "reference_audio": reference_audio,
+                    "voice_cloning": True,
+                    "engine": "xtts-v2"
+                }
+            else:
+                return {"success": False, "error": "Voice cloning failed to generate audio file"}
+                
+        except Exception as e:
+            return {"success": False, "error": f"Voice cloning failed: {e}"}
     
     def _get_actual_audio_duration(self, audio_path: str) -> float:
         """
@@ -321,11 +531,107 @@ class CoquiSpeechGenerator:
             return False
 
 
-def get_recommended_models() -> List[str]:
+def get_recommended_models() -> List[Dict[str, Any]]:
     """Get a list of recommended models for different use cases."""
     return [
-        "tts_models/en/ljspeech/tacotron2-DDC",  # Fast, good quality
-        "tts_models/en/ljspeech/fast_pitch",     # Very fast
-        "tts_models/en/vctk/vits",               # Multiple speakers
-        "tts_models/en/jenny/jenny",             # High quality female voice
+        {
+            "name": "XTTS-v2 (Voice Cloning)",
+            "model_name": "tts_models/multilingual/multi-dataset/xtts_v2",
+            "description": "Advanced voice cloning with 6s audio, 17 languages",
+            "features": ["voice_cloning", "multilingual", "high_quality"],
+            "sample_rate": 24000,
+            "languages": ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh-cn", "ja", "hu", "ko"],
+            "use_case": "Custom voices, multilingual content",
+            "quality": "excellent",
+            "speed": "medium"
+        },
+        {
+            "name": "FastPitch (Best Quality)",
+            "model_name": "tts_models/en/ljspeech/fast_pitch",
+            "description": "High quality English TTS with fast inference",
+            "features": ["high_quality", "fast", "stable"],
+            "sample_rate": 22050,
+            "languages": ["en"],
+            "use_case": "English content, production use",
+            "quality": "high",
+            "speed": "fast"
+        },
+        {
+            "name": "VITS Multi-Speaker",
+            "model_name": "tts_models/en/vctk/vits",
+            "description": "Multiple English speakers including male voices",
+            "features": ["multi_speaker", "natural"],
+            "sample_rate": 22050,
+            "languages": ["en"],
+            "use_case": "Varied voices, character speech",
+            "quality": "high", 
+            "speed": "medium",
+            "speakers": ["p225", "p226", "p227", "p228", "p229", "p230", "p231", "p232"]
+        },
+        {
+            "name": "Jenny (Female Voice)",
+            "model_name": "tts_models/en/jenny/jenny",
+            "description": "High quality female English voice",
+            "features": ["female_voice", "clear"],
+            "sample_rate": 22050,
+            "languages": ["en"],
+            "use_case": "Female narrator, clear speech",
+            "quality": "high",
+            "speed": "medium"
+        },
+        {
+            "name": "Tacotron2 (Fast)",
+            "model_name": "tts_models/en/ljspeech/tacotron2-DDC",
+            "description": "Fast and reliable English TTS",
+            "features": ["fast", "reliable", "lightweight"],
+            "sample_rate": 22050,
+            "languages": ["en"],
+            "use_case": "Quick generation, testing",
+            "quality": "good",
+            "speed": "very_fast"
+        }
     ]
+
+
+def get_xtts_supported_languages() -> List[Dict[str, str]]:
+    """Get list of languages supported by XTTS-v2."""
+    return [
+        {"code": "en", "name": "English"},
+        {"code": "es", "name": "Spanish"},
+        {"code": "fr", "name": "French"}, 
+        {"code": "de", "name": "German"},
+        {"code": "it", "name": "Italian"},
+        {"code": "pt", "name": "Portuguese"},
+        {"code": "pl", "name": "Polish"},
+        {"code": "tr", "name": "Turkish"},
+        {"code": "ru", "name": "Russian"},
+        {"code": "nl", "name": "Dutch"},
+        {"code": "cs", "name": "Czech"},
+        {"code": "ar", "name": "Arabic"},
+        {"code": "zh-cn", "name": "Chinese (Simplified)"},
+        {"code": "ja", "name": "Japanese"},
+        {"code": "hu", "name": "Hungarian"},
+        {"code": "ko", "name": "Korean"}
+    ]
+
+
+def create_voice_cloning_config(reference_audio: str, language: str = "en", 
+                               gpu: bool = False, **kwargs) -> CoquiTTSConfig:
+    """
+    Create a configuration optimized for voice cloning with XTTS-v2.
+    
+    Args:
+        reference_audio: Path to reference audio file
+        language: Target language for generation
+        gpu: Whether to use GPU acceleration
+        **kwargs: Additional configuration parameters
+        
+    Returns:
+        CoquiTTSConfig configured for voice cloning
+    """
+    return CoquiTTSConfig.for_xtts_v2(
+        speaker_wav=reference_audio,
+        language=language,
+        gpu=gpu,
+        **kwargs
+    )

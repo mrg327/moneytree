@@ -43,7 +43,7 @@ class CaptionStyle:
     bg_color: str = 'black'
     bg_opacity: float = 0.7
     position: str = 'center'  # 'top', 'center', 'bottom'
-    max_width: int = 80  # Percentage of video width
+    max_width: int = 80  # Percentage of video width (will be adjusted for better space utilization)
     words_per_caption: int = 6
     font_family: str = None
     stroke_color: str = 'black'
@@ -64,7 +64,7 @@ class CaptionStyle:
             bg_opacity=0.8,
             position='center',  # Center positioning for better visibility
             max_width=85,  # Slightly wider for center positioning
-            words_per_caption=6,  # Slightly more words since center has more space
+            words_per_caption=8,  # More words to utilize center space better
             font_family=None,
             stroke_color='black',
             stroke_width=2  # Clean stroke for readability
@@ -95,8 +95,8 @@ class CaptionStyle:
             bg_color='black',
             bg_opacity=0.7,
             position='bottom',
-            max_width=80,
-            words_per_caption=8,
+            max_width=85,  # Increased for better space utilization
+            words_per_caption=10,  # More words to utilize horizontal space better
             font_family=None,
             stroke_color='black',
             stroke_width=2
@@ -605,8 +605,8 @@ class VideoClip:
         
         for caption_info in timing_data:
             try:
-                # Optimize font size for this specific caption content
-                max_text_width = int(width * 0.8)  # Leave 20% for margins
+                # Optimize font size for this specific caption content - use 85% to better utilize space
+                max_text_width = int(width * 0.85)  # Leave 15% for margins to maximize text area
                 optimized_style = self._optimize_font_size_for_content(
                     caption_info['text'], style, max_text_width, height
                 )
@@ -1013,9 +1013,9 @@ class VideoClip:
         # Calculate extra descender clearance based on font size
         descender_clearance = max(8, int(style.font_size * 0.25))  # 25% of font size or 8px minimum
         
-        # Define increased margins (15% of video dimensions) + 25px buffer (increased)
-        margin_x = int(video_width * 0.15) + 25
-        margin_y = int(video_height * 0.15) + 25
+        # Define margins (10% of video dimensions) + 20px buffer - reduced to utilize more space
+        margin_x = int(video_width * 0.10) + 20
+        margin_y = int(video_height * 0.10) + 20
         
         # Calculate safe boundaries with extra padding
         safe_left = margin_x
@@ -1065,13 +1065,13 @@ class VideoClip:
 
     def _wrap_text_for_display(self, text: str, style: CaptionStyle) -> str:
         """Wrap text appropriately for video display."""
-        # Character limits based on position and screen size
+        # Character limits based on position and screen size - increased to utilize more space
         if style.position == 'center':
-            max_chars_per_line = 25  # Center has more flexibility
+            max_chars_per_line = 35  # Center has more flexibility, utilize the middle 80%
         elif style.position == 'top':
-            max_chars_per_line = 20  # Top needs more conservative spacing
+            max_chars_per_line = 30  # Top with more space utilization
         else:  # bottom
-            max_chars_per_line = 22  # Bottom positioning
+            max_chars_per_line = 32  # Bottom with better space utilization
         
         # Only wrap if text is longer than limit
         if len(text) <= max_chars_per_line:
@@ -1279,13 +1279,13 @@ class VideoClip:
                 
                 # Wrap text to prevent cutoff with better logic
                 text = caption_info['text']
-                # Character limits based on position and screen size
+                # Character limits based on position and screen size - increased to utilize more space
                 if style.position == 'center':
-                    max_chars_per_line = 25  # Center has more flexibility
+                    max_chars_per_line = 35  # Center has more flexibility, utilize the middle 80%
                 elif style.position == 'top':
-                    max_chars_per_line = 20  # Top needs more conservative spacing
+                    max_chars_per_line = 30  # Top with more space utilization
                 else:  # bottom
-                    max_chars_per_line = 22  # Bottom positioning
+                    max_chars_per_line = 32  # Bottom with better space utilization
                 
                 # Only wrap if text is longer than limit
                 if len(text) > max_chars_per_line:

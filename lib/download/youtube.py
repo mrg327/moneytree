@@ -23,13 +23,16 @@ except ImportError:
 class DownloadConfig:
     """Configuration for YouTube downloads."""
     output_dir: str = "downloads"
-    video_quality: str = "720p"  # "144p", "240p", "360p", "480p", "720p", "1080p", "best"
+    video_quality: str = "720p"  # "144p", "240p", "360p", "480p", "720p", "1080p", "1440p", "2160p", "4320p", "high", "highest", "best"
     audio_quality: str = "128"   # "64", "128", "192", "256", "320", "best"
-    output_format: str = "mp4"   # For video: "mp4", "webm", "mkv"
+    output_format: str = "mp4"   # For video: "mp4", "webm", "mkv", "any" (auto-select best)
     audio_format: str = "mp3"    # For audio: "mp3", "m4a", "wav", "flac"
     include_subtitles: bool = True
     subtitle_language: str = "en"
-    max_filesize: str = "100M"   # "50M", "100M", "500M", "1G"
+    max_filesize: str = "100M"   # "50M", "100M", "500M", "1G", "2G", "5G"
+    codec_preference: str = "any"  # "h264", "vp9", "av1", "any" (prefer better codecs)
+    prefer_60fps: bool = False   # Prefer 60fps when available
+    show_available_formats: bool = False  # Debug: show all available formats
 
 
 @dataclass
@@ -91,6 +94,96 @@ class YouTubeDownloader:
             'writethumbnail': False,
             'writeinfojson': False,
         }
+    
+    def _get_video_format_string(self, quality: str) -> str:
+        """
+        Generate intelligent format string for video downloads.
+        
+        Args:
+            quality: Quality preference (e.g., "720p", "1080p", "4k", "high", "highest")
+            
+        Returns:
+            yt-dlp format string optimized for quality
+        """
+        # Quality preset mappings - prioritize separate video+audio for highest quality
+        quality_presets = {
+            "highest": "bestvideo+bestaudio/best[height>=2160]/best[height>=1440]/best[height>=1080]/best",
+            "high": "bestvideo[height>=1080][fps<=60]+bestaudio/best[height>=1080][fps<=60]/best[height>=720]/best",
+            "4k": "bestvideo[height>=2160]+bestaudio/best[height>=2160]/bestvideo[height=2160]+bestaudio/best[height>=1440]/best",
+            "8k": "bestvideo[height>=4320]+bestaudio/best[height>=4320]/bestvideo[height=4320]+bestaudio/best[height>=2160]/best",
+            "2160p": "bestvideo[height>=2160]+bestaudio/best[height>=2160]/bestvideo[height=2160]+bestaudio/best[height>=1440]/best",
+            "1440p": "bestvideo[height>=1440]+bestaudio/best[height>=1440]/bestvideo[height=1440]+bestaudio/best[height>=1080]/best",
+        }
+        
+        # Handle quality presets
+        if quality in quality_presets:
+            format_string = quality_presets[quality]
+        elif quality == "best":
+            format_string = "best"
+        else:
+            # Parse specific resolution (e.g., "720p", "1080p")
+            height = quality.replace('p', '') if quality.endswith('p') else quality
+            
+            # Build format string with intelligent fallbacks
+            format_parts = []
+            
+            # Codec preference logic
+            if self.config.codec_preference == "vp9":
+                codec_filter = "[vcodec*=vp9]"
+            elif self.config.codec_preference == "av1":
+                codec_filter = "[vcodec*=av01]"
+            elif self.config.codec_preference == "h264":
+                codec_filter = "[vcodec*=avc1]"
+            else:
+                codec_filter = ""
+            
+            # FPS preference
+            fps_filter = "[fps<=60]" if self.config.prefer_60fps else ""
+            
+            # Container format preference
+            if self.config.output_format == "any":
+                container_filter = ""
+            else:
+                container_filter = f"[ext={self.config.output_format}]"
+            
+            # Build progressive format string with fallbacks
+            if height.isdigit():
+                height_num = int(height)
+                
+                # For high quality (720p+), prioritize separate video+audio streams
+                if height_num >= 720:
+                    # Primary: separate video+audio with all preferences (highest quality)
+                    format_parts.append(f"bestvideo[height={height_num}]{codec_filter}{fps_filter}+bestaudio")
+                    
+                    # Fallback 1: separate video+audio with codec preference only
+                    if codec_filter:
+                        format_parts.append(f"bestvideo[height={height_num}]{codec_filter}+bestaudio")
+                    
+                    # Fallback 2: separate video+audio, any codec
+                    format_parts.append(f"bestvideo[height={height_num}]+bestaudio")
+                    
+                    # Fallback 3: separate video+audio up to height
+                    format_parts.append(f"bestvideo[height<={height_num}]{codec_filter}+bestaudio")
+                    format_parts.append(f"bestvideo[height<={height_num}]+bestaudio")
+                
+                # Combined stream fallbacks
+                format_parts.append(f"best[height={height_num}]{codec_filter}{fps_filter}{container_filter}")
+                
+                if codec_filter:
+                    format_parts.append(f"best[height={height_num}]{codec_filter}")
+                
+                format_parts.append(f"best[height={height_num}]")
+                format_parts.append(f"best[height<={height_num}]")
+            else:
+                # Non-numeric quality, use best available
+                format_parts.append("best")
+            
+            # Final fallback
+            format_parts.append("best")
+            
+            format_string = "/".join(format_parts)
+        
+        return format_string
     
     def get_video_info(self, url: str) -> Optional[VideoInfo]:
         """
@@ -176,12 +269,46 @@ class YouTubeDownloader:
             else:
                 ydl_opts['outtmpl'] = str(self.video_dir / '%(title)s.%(ext)s')
             
-            # Set video quality format
-            if quality == "best":
-                ydl_opts['format'] = f'best[ext={self.config.output_format}]'
+            # Generate intelligent format string
+            format_string = self._get_video_format_string(quality)
+            ydl_opts['format'] = format_string
+            
+            print(f"🎯 Format selector: {format_string}")
+            
+            # Enable verbose logging to see what's actually happening
+            ydl_opts['verbose'] = True
+            
+            # Configure for highest quality downloads
+            ydl_opts['merge_output_format'] = 'mp4'  # Merge video+audio to mp4
+            ydl_opts['keepvideo'] = False  # Don't keep separate streams after merge
+            
+            # Only add FFmpeg merger for video+audio streams (no re-encoding)
+            if '+' in format_string:  # Only if we're using separate video+audio
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4'
+                }]
             else:
-                height = quality.replace('p', '')
-                ydl_opts['format'] = f'best[height<={height}][ext={self.config.output_format}]/best[height<={height}]/best'
+                ydl_opts['postprocessors'] = []
+            
+            # Show available formats if requested
+            if self.config.show_available_formats:
+                print("🔍 Checking available formats...")
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True}) as temp_ydl:
+                        info = temp_ydl.extract_info(url, download=False)
+                        if info and 'formats' in info:
+                            print("📋 Available formats:")
+                            for fmt in info['formats'][:10]:  # Show first 10
+                                height = fmt.get('height', 'N/A')
+                                fps = fmt.get('fps', 'N/A')
+                                vcodec = fmt.get('vcodec', 'N/A')
+                                ext = fmt.get('ext', 'N/A')
+                                filesize = fmt.get('filesize')
+                                size_mb = f"{filesize/(1024*1024):.1f}MB" if filesize else "N/A"
+                                print(f"   {height}p {fps}fps {vcodec} {ext} ({size_mb})")
+                except Exception as e:
+                    print(f"⚠️  Could not list formats: {e}")
             
             # Add subtitle options
             if self.config.include_subtitles:
@@ -212,14 +339,40 @@ class YouTubeDownloader:
                 
                 # Check if file exists (yt-dlp might have modified the name)
                 if not output_path.exists():
-                    # Try to find the actual downloaded file
-                    for file_path in self.video_dir.glob(f"{safe_title}*"):
-                        if file_path.suffix.lower() in ['.mp4', '.webm', '.mkv']:
-                            output_path = file_path
+                    # Try to find the actual downloaded file with various extensions
+                    possible_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.m4v']
+                    
+                    # First try exact title match with different extensions
+                    for ext in possible_extensions:
+                        test_path = self.video_dir / f"{safe_title}{ext}"
+                        if test_path.exists():
+                            output_path = test_path
+                            print(f"📁 Found file: {output_path.name}")
                             break
+                    
+                    # If still not found, search for any video file with similar name
+                    if not output_path.exists():
+                        for file_path in self.video_dir.glob(f"{safe_title}*"):
+                            if file_path.suffix.lower() in possible_extensions:
+                                output_path = file_path
+                                print(f"📁 Found similar file: {output_path.name}")
+                                break
+                        
+                        # Last resort: find the most recent video file
+                        if not output_path.exists():
+                            video_files = []
+                            for ext in possible_extensions:
+                                video_files.extend(self.video_dir.glob(f"*{ext}"))
+                            
+                            if video_files:
+                                output_path = max(video_files, key=lambda p: p.stat().st_mtime)
+                                print(f"📁 Using most recent video: {output_path.name}")
                 
                 if output_path.exists():
                     file_size = output_path.stat().st_size
+                    
+                    # Analyze the actual downloaded video quality
+                    actual_quality = self._analyze_video_quality(output_path)
                     
                     return {
                         "success": True,
@@ -228,7 +381,8 @@ class YouTubeDownloader:
                         "title": info.get('title', 'Unknown'),
                         "duration": info.get('duration', 0),
                         "quality": quality,
-                        "format": self.config.output_format,
+                        "actual_quality": actual_quality,
+                        "format": output_path.suffix[1:],  # Actual file extension
                         "download_type": "video"
                     }
                 else:
@@ -423,6 +577,45 @@ class YouTubeDownloader:
             ])
         
         return any(re.match(pattern, url) for pattern in youtube_patterns)
+    
+    def _analyze_video_quality(self, video_path: Path) -> Dict[str, Any]:
+        """
+        Analyze the actual quality of a downloaded video file.
+        
+        Args:
+            video_path: Path to the video file
+            
+        Returns:
+            Dictionary with quality information
+        """
+        try:
+            # Try to get video info using yt-dlp
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(str(video_path), download=False)
+                
+                if info:
+                    return {
+                        "resolution": f"{info.get('width', 'N/A')}x{info.get('height', 'N/A')}",
+                        "height": info.get('height', 'Unknown'),
+                        "fps": info.get('fps', 'Unknown'),
+                        "vcodec": info.get('vcodec', 'Unknown'),
+                        "acodec": info.get('acodec', 'Unknown'),
+                        "bitrate": info.get('tbr', 'Unknown'),
+                        "container": info.get('ext', 'Unknown')
+                    }
+        except Exception as e:
+            print(f"⚠️  Could not analyze video quality: {e}")
+        
+        # Fallback: basic file info
+        return {
+            "resolution": "Unknown",
+            "height": "Unknown", 
+            "fps": "Unknown",
+            "vcodec": "Unknown",
+            "acodec": "Unknown",
+            "bitrate": "Unknown",
+            "container": video_path.suffix[1:] if video_path.suffix else "Unknown"
+        }
     
     def _sanitize_filename(self, filename: str) -> str:
         """Sanitize filename for safe file system storage."""

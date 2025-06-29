@@ -18,7 +18,7 @@ def main():
     parser.add_argument('url', nargs='?', help='YouTube URL to download')
     parser.add_argument('--type', choices=['video', 'audio', 'info'], default='info',
                        help='Download type')
-    parser.add_argument('--quality', help='Quality setting (720p, 1080p for video; 128, 192 for audio)')
+    parser.add_argument('--quality', help='Quality setting (144p, 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, 4k, 8k, high, highest, best for video; 64, 128, 192, 256, 320, best for audio)')
     parser.add_argument('--output', help='Custom output filename (without extension)')
     parser.add_argument('--format', help='Output format (mp4, webm for video; mp3, m4a for audio)')
     parser.add_argument('--output-dir', default='downloads', help='Output directory')
@@ -27,6 +27,14 @@ def main():
                        help='Clean up downloads older than DAYS')
     parser.add_argument('--recommended', action='store_true', 
                        help='Show recommended educational channels')
+    parser.add_argument('--codec', choices=['h264', 'vp9', 'av1', 'any'], default='any',
+                       help='Preferred video codec')
+    parser.add_argument('--60fps', action='store_true',
+                       help='Prefer 60fps when available')
+    parser.add_argument('--show-formats', action='store_true',
+                       help='Show available formats before downloading')
+    parser.add_argument('--test-formats', action='store_true',
+                       help='Test different quality settings on a URL (no download)')
     
     args = parser.parse_args()
     
@@ -54,6 +62,11 @@ def main():
             config.output_format = args.format
         else:
             config.audio_format = args.format
+    
+    # Set advanced video options
+    config.codec_preference = args.codec
+    config.prefer_60fps = getattr(args, '60fps', False)
+    config.show_available_formats = getattr(args, 'show_formats', False)
     
     downloader = YouTubeDownloader(config)
     
@@ -87,8 +100,11 @@ def main():
     # Validate URL
     if not args.url:
         print("❌ YouTube URL is required")
-        print("💡 Example: python demo_youtube_download.py \"https://www.youtube.com/watch?v=VIDEO_ID\" --type video")
-        print("💡 Use --recommended to see educational channels")
+        print("💡 Examples:")
+        print("   • Standard download: uv run python -m tools.youtube_download \"URL\" --type video --quality 1080p")
+        print("   • High-quality 4K:   uv run python -m tools.youtube_download \"URL\" --type video --quality 4k --codec vp9")
+        print("   • Maximum quality:   uv run python -m tools.youtube_download \"URL\" --type video --quality highest --show-formats")
+        print("   • Use --recommended to see educational channels")
         return
     
     print("🌳 MoneyTree: YouTube Content Downloader")
@@ -113,9 +129,26 @@ def main():
     print(f"   📅 Upload Date: {video_info.upload_date}")
     print(f"   🎥 Available Formats: {', '.join(video_info.available_formats[:5])}{'...' if len(video_info.available_formats) > 5 else ''}")
     
+    # Test format selection
+    if args.test_formats:
+        print("\\n🧪 Testing format selection for different quality settings:")
+        print("=" * 60)
+        
+        quality_tests = ['720p', '1080p', '1440p', '2160p', '4k', 'high', 'highest']
+        
+        for test_quality in quality_tests:
+            test_config = DownloadConfig(codec_preference=args.codec, prefer_60fps=getattr(args, '60fps', False))
+            test_downloader = YouTubeDownloader(test_config)
+            format_string = test_downloader._get_video_format_string(test_quality)
+            print(f"🎯 {test_quality:>8}: {format_string}")
+        
+        print("\\n💡 Use --show-formats to see what's actually available for this video")
+        return
+
     if args.type == 'info':
         print("\\n📋 Info only mode - no download performed")
         print("💡 Use --type video or --type audio to download")
+        print("💡 Use --test-formats to see format selection logic")
         return
     
     # Perform download
@@ -138,9 +171,35 @@ def main():
         print(f"✅ {args.type.title()} downloaded successfully!")
         print(f"💾 Saved to: {result['output_path']}")
         print(f"📦 File size: {result['file_size']:,} bytes ({result['file_size']/(1024*1024):.1f} MB)")
-        print(f"🎯 Quality: {result['quality']}")
+        print(f"🎯 Requested quality: {result['quality']}")
         print(f"📄 Format: {result['format']}")
         print(f"⏱️  Duration: {result['duration']:.0f} seconds")
+        
+        # Show actual video quality if available
+        if 'actual_quality' in result and args.type == 'video':
+            actual = result['actual_quality']
+            print(f"\\n📊 Actual Video Quality:")
+            print(f"   Resolution: {actual['resolution']}")
+            print(f"   Height: {actual['height']}p")
+            print(f"   FPS: {actual['fps']}")
+            print(f"   Video Codec: {actual['vcodec']}")
+            print(f"   Audio Codec: {actual['acodec']}")
+            print(f"   Bitrate: {actual['bitrate']} kbps")
+            
+            # Quality assessment
+            if actual['height'] != 'Unknown' and str(actual['height']).isdigit():
+                height = int(actual['height'])
+                if height >= 2160:
+                    quality_assessment = "🌟 Excellent (4K+)"
+                elif height >= 1440:
+                    quality_assessment = "⭐ Very Good (1440p+)"
+                elif height >= 1080:
+                    quality_assessment = "👍 Good (1080p+)"
+                elif height >= 720:
+                    quality_assessment = "📺 Standard (720p+)"
+                else:
+                    quality_assessment = "📱 Low (<720p)"
+                print(f"   Assessment: {quality_assessment}")
         
         # Provide Windows path
         windows_path = str(result['output_path']).replace('/mnt/c/', 'C:\\\\').replace('/', '\\\\')
@@ -149,11 +208,15 @@ def main():
         # Usage suggestions
         if args.type == 'video':
             print(f"\\n💡 Usage suggestions:")
-            print(f"   • Use as template: python demo_video.py \"Topic\" --template \"{result['output_path']}\"")
+            print(f"   • Use as template: uv run python -m demos.wikipedia_video \"Topic\" --template \"{result['output_path']}\"")
             print(f"   • Edit with VideoClip: VideoClip(\"{result['output_path']}\").add_captions(...)")
+            print(f"\\n🎯 Quality tips:")
+            print(f"   • For 4K: --quality 4k --codec vp9")
+            print(f"   • For maximum: --quality highest --show-formats")
+            print(f"   • For web streaming: --quality high --60fps")
         else:
             print(f"\\n💡 Usage suggestions:")
-            print(f"   • Background music: python demo_video.py \"Topic\" --music \"{result['output_path']}\"")
+            print(f"   • Background music: uv run python -m demos.wikipedia_video \"Topic\" --music \"{result['output_path']}\"")
             print(f"   • Audio analysis: Use with librosa for speech/music analysis")
     else:
         print(f"❌ {args.type.title()} download failed: {result.get('error', 'Unknown error')}")

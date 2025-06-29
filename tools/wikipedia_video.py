@@ -6,7 +6,7 @@ Creates educational videos with synchronized captions and background music.
 """
 
 from lib.utils.logging_config import setup_logging, get_logger, LoggedOperation
-setup_logging(log_level="INFO", console_output=True)
+setup_logging(log_level="INFO", console_output=True, detailed_format=True)
 logger = get_logger(__name__)
 
 logger.info("Importing Modules")

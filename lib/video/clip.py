@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 try:
     # MoviePy 2.x imports (direct from moviepy, not moviepy.editor)
-    from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, afx, concatenate_audioclips
+    from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, afx, concatenate_audioclips, ImageClip
     import librosa
     import numpy as np
     HAS_VIDEO_DEPS = True
@@ -43,8 +43,8 @@ class CaptionStyle:
     bg_color: str = 'black'
     bg_opacity: float = 0.7
     position: str = 'center'  # 'top', 'center', 'bottom'
-    max_width: int = 80  # Percentage of video width (will be adjusted for better space utilization)
-    words_per_caption: int = 6
+    max_width: int = 90  # Percentage of video width (will be adjusted for better space utilization)
+    words_per_caption: int = 10  # Increased for better space utilization with 2-line layout
     font_family: str = None
     stroke_color: str = 'black'
     stroke_width: int = 2
@@ -63,8 +63,8 @@ class CaptionStyle:
             bg_color='black',
             bg_opacity=0.8,
             position='center',  # Center positioning for better visibility
-            max_width=85,  # Slightly wider for center positioning
-            words_per_caption=8,  # More words to utilize center space better
+            max_width=95,  # Use almost full screen width for large fonts
+            words_per_caption=8,  # More words with better horizontal space utilization
             font_family=None,
             stroke_color='black',
             stroke_width=2  # Clean stroke for readability
@@ -80,7 +80,7 @@ class CaptionStyle:
             bg_opacity=0.5,  # Reduced opacity for faster rendering
             position='bottom',
             max_width=85,
-            words_per_caption=6,
+            words_per_caption=10,  # More words for better space utilization
             font_family=None,
             stroke_color='black',
             stroke_width=1  # Thinner stroke for speed
@@ -95,8 +95,8 @@ class CaptionStyle:
             bg_color='black',
             bg_opacity=0.7,
             position='bottom',
-            max_width=85,  # Increased for better space utilization
-            words_per_caption=10,  # More words to utilize horizontal space better
+            max_width=95,  # Use almost full screen width for large fonts
+            words_per_caption=10,  # More words with maximum horizontal space utilization
             font_family=None,
             stroke_color='black',
             stroke_width=2
@@ -211,6 +211,9 @@ class VideoClip:
         # Track audio and video components
         self.audio_clips = []
         self.video_components = []
+        
+        # Track Wikipedia image if added
+        self.wikipedia_image_duration = 0.0
         
     def _load_template(self):
         """Load and analyze the template video."""
@@ -471,7 +474,7 @@ class VideoClip:
         if style.font_size <= 24:
             return int(base_length * 1.2)  # Smaller font = more text
         elif style.font_size >= 48:
-            return int(base_length * 0.8)  # Larger font = less text
+            return int(base_length * 0.95)  # Larger font = less text
         else:
             return base_length
     
@@ -591,6 +594,7 @@ class VideoClip:
     ) -> List[Any]:
         """
         Create caption clips with precise positioning and dynamic font sizing.
+        Now splits text into multiple captions instead of dropping overflow.
         
         Args:
             timing_data: List of caption timing information
@@ -605,35 +609,44 @@ class VideoClip:
         
         for caption_info in timing_data:
             try:
-                # Optimize font size for this specific caption content - use 85% to better utilize space
-                max_text_width = int(width * 0.85)  # Leave 15% for margins to maximize text area
+                # Maximize horizontal space utilization - use 99% of available width
+                max_text_width = int(width * 0.99)  # Leave only 1% for margins to maximize text area
                 optimized_style = self._optimize_font_size_for_content(
                     caption_info['text'], style, max_text_width, height
                 )
                 
-                # Wrap text with optimized style
-                text = self._wrap_text_for_display_pixel_based(caption_info['text'], optimized_style, max_text_width)
+                # Split text into multiple captions that fit within constraints
+                caption_texts = self._split_text_into_captions(caption_info['text'], optimized_style, max_text_width)
                 
-                # Use computer vision positioning for optimal placement
-                position = self._find_optimal_caption_position_cv(text, optimized_style, width, height)
+                # Calculate timing for each split caption
+                original_duration = caption_info['duration']
+                original_start = caption_info['start']
+                duration_per_caption = original_duration / len(caption_texts)
                 
-                # Create text clip with enhanced styling
-                txt_clip = self._create_styled_text_clip(
-                    text, 
-                    optimized_style, 
-                    position, 
-                    caption_info['start'], 
-                    caption_info['duration']
-                )
-                
-                if txt_clip:
-                    caption_clips.append(txt_clip)
+                # Create a clip for each split caption
+                for i, caption_text in enumerate(caption_texts):
+                    start_time = original_start + (i * duration_per_caption)
                     
+                    # Use computer vision positioning for optimal placement
+                    position = self._find_optimal_caption_position_cv(caption_text, optimized_style, width, height)
+                    
+                    # Create text clip with enhanced styling
+                    txt_clip = self._create_styled_text_clip(
+                        caption_text, 
+                        optimized_style, 
+                        position, 
+                        start_time, 
+                        duration_per_caption
+                    )
+                    
+                    if txt_clip:
+                        caption_clips.append(txt_clip)
+                        
             except Exception as e:
                 logger.warning(f"Failed to create caption clip for '{caption_info['text'][:30]}...': {e}")
                 continue
         
-        logger.info(f"✅ Created {len(caption_clips)} caption clips with dynamic sizing")
+        logger.info(f"✅ Created {len(caption_clips)} caption clips with no text dropped")
         return caption_clips
     
     
@@ -840,16 +853,14 @@ class VideoClip:
         """Legacy wrapper - now uses descender-aware measurement."""
         return self._measure_text_dimensions_with_descenders(text, style)
 
-    def _wrap_text_for_display_pixel_based(self, text: str, style: CaptionStyle, max_width: int) -> str:
-        """Wrap text based on actual pixel width with 10% safety margin and overflow detection."""
-        # Apply 10% safety margin to prevent text cutoffs
-        safe_max_width = int(max_width * 0.9)
-        original_text = text
+    def _wrap_text_for_display_pixel_based(self, text: str, style: CaptionStyle, max_width: int, line_limit=2) -> str:
+        """Wrap text based on actual pixel width - returns only what fits in the specified lines."""
+        # Minimize safety margin to maximize space utilization
+        safe_max_width = int(max_width * 0.995)
         
         words = text.split()
         lines = []
         current_line = ""
-        truncated_words = []
         
         for word in words:
             test_line = current_line + (" " if current_line else "") + word
@@ -862,33 +873,14 @@ class VideoClip:
                     lines.append(current_line)
                     current_line = word
                 else:
-                    # Single word too long, truncate with safety margin
-                    original_word = word
-                    while self._measure_text_dimensions(word + "...", style)[0] > safe_max_width and len(word) > 3:
-                        word = word[:-1]
-                    if word != original_word:
-                        truncated_words.append(original_word)
-                        word = word + "..."
+                    # Single word too long, try to fit it anyway
                     current_line = word
         
         if current_line:
             lines.append(current_line)
         
-        final_text = '\n'.join(lines[:2])  # Still limit to 2 lines
-        
-        # Enhanced text overflow detection with descender awareness
-        if len(lines) > 2:
-            dropped_lines = lines[2:]
-            logger.warning(f"Caption overflow: {len(dropped_lines)} lines dropped from '{original_text[:30]}...'")
-            logger.debug(f"Dropped content: {' '.join(dropped_lines)}")
-        
-        if truncated_words:
-            logger.warning(f"Caption truncation: {len(truncated_words)} words truncated in '{original_text[:30]}...'")
-            logger.debug(f"Truncated words: {truncated_words}")
-        
-        # Check if final text is significantly shorter than original
-        if len(final_text.replace('\n', ' ')) < len(original_text) * 0.7:
-            logger.warning(f"Significant text loss in caption: {len(final_text)}/{len(original_text)} chars retained")
+        # Return only the lines that fit within the limit
+        final_text = '\n'.join(lines[:line_limit])
         
         # Check for descender content and provide specific warnings
         if self._has_descenders(final_text):
@@ -896,6 +888,49 @@ class VideoClip:
             logger.debug(f"Caption contains {descender_count} descender characters: '{final_text[:30]}...'")
             
         return final_text
+    
+    def _split_text_into_captions(self, text: str, style: CaptionStyle, max_width: int, line_limit=2) -> List[str]:
+        """Split text into multiple captions that each fit within the specified constraints."""
+        words = text.split()
+        captions = []
+        current_caption_words = []
+        
+        # Minimize safety margin to maximize space utilization
+        safe_max_width = int(max_width * 0.995)
+        
+        i = 0
+        while i < len(words):
+            current_caption_words.append(words[i])
+            current_caption_text = ' '.join(current_caption_words)
+            
+            # Test if current caption fits within constraints
+            wrapped_text = self._wrap_text_for_display_pixel_based(current_caption_text, style, max_width, line_limit)
+            wrapped_words = wrapped_text.replace('\n', ' ').split()
+            
+            # If wrapped text has fewer words than our current caption, we've exceeded the limit
+            if len(wrapped_words) < len(current_caption_words):
+                # Remove the last word that caused overflow
+                current_caption_words.pop()
+                
+                # Save the current caption if it has content
+                if current_caption_words:
+                    captions.append(' '.join(current_caption_words))
+                    current_caption_words = []
+                    # Don't increment i, try the same word again for the next caption
+                else:
+                    # Edge case: single word doesn't fit, include it anyway
+                    captions.append(words[i])
+                    current_caption_words = []
+                    i += 1
+            else:
+                i += 1
+        
+        # Add any remaining words as the final caption
+        if current_caption_words:
+            captions.append(' '.join(current_caption_words))
+        
+        logger.debug(f"Split text into {len(captions)} captions: {[cap[:30] + '...' if len(cap) > 30 else cap for cap in captions]}")
+        return captions
 
     def _find_optimal_caption_position_cv(self, text: str, style: CaptionStyle, video_width: int, video_height: int) -> tuple:
         """Use computer vision to find optimal caption position based on video content."""
@@ -1063,45 +1098,6 @@ class VideoClip:
         """Legacy wrapper - now uses descender-aware positioning."""
         return self._calculate_safe_position_with_descenders(text, style, video_width, video_height)
 
-    def _wrap_text_for_display(self, text: str, style: CaptionStyle) -> str:
-        """Wrap text appropriately for video display."""
-        # Character limits based on position and screen size - increased to utilize more space
-        if style.position == 'center':
-            max_chars_per_line = 35  # Center has more flexibility, utilize the middle 80%
-        elif style.position == 'top':
-            max_chars_per_line = 30  # Top with more space utilization
-        else:  # bottom
-            max_chars_per_line = 32  # Bottom with better space utilization
-        
-        # Only wrap if text is longer than limit
-        if len(text) <= max_chars_per_line:
-            return text
-            
-        words = text.split()
-        lines = []
-        current_line = ""
-        
-        for word in words:
-            # Test if adding this word would exceed the limit
-            test_line = current_line + (" " if current_line else "") + word
-            if len(test_line) <= max_chars_per_line:
-                current_line = test_line
-            else:
-                # Current line is full, start new line
-                if current_line:
-                    lines.append(current_line)
-                    current_line = word
-                else:
-                    # Single word is too long, truncate it
-                    current_line = word[:max_chars_per_line-3] + "..."
-        
-        # Don't forget the last line
-        if current_line:
-            lines.append(current_line)
-        
-        # Limit to 2 lines max and join with actual newlines
-        return '\n'.join(lines[:2])
-    
     def _analyze_video_content_for_background(self, width: int, height: int, position_y: int) -> tuple:
         """Analyze video content at caption position to determine optimal background color."""
         try:
@@ -1256,101 +1252,6 @@ class VideoClip:
                 logger.error(f"Failed to create even minimal TextClip: {fallback_error}")
                 return None
     
-    def _create_caption_clips(self, timing_data: List[Dict[str, Any]], style: CaptionStyle) -> List[Any]:
-        """Create MoviePy TextClip objects for captions."""
-        caption_clips = []
-        
-        for caption_info in timing_data:
-            try:
-                # Calculate position for better placement
-                # MoviePy positioning: (x, y) where y is from TOP of video frame
-                if style.position == 'bottom':
-                    position = ('center', 0.75)  # 75% down from top, higher up to avoid cutoff
-                elif style.position == 'top':
-                    position = ('center', 0.25)  # 25% down from top, lower to avoid cutoff
-                elif style.position == 'center':
-                    # Use explicit center positioning - 0.45 to account for text height
-                    position = ('center', 0.45)  # Slightly above true center for better visual balance
-                else:
-                    # Default fallback to center
-                    position = ('center', 0.45)
-                
-                logger.debug(f"Caption position for '{style.position}': {position}")
-                
-                # Wrap text to prevent cutoff with better logic
-                text = caption_info['text']
-                # Character limits based on position and screen size - increased to utilize more space
-                if style.position == 'center':
-                    max_chars_per_line = 35  # Center has more flexibility, utilize the middle 80%
-                elif style.position == 'top':
-                    max_chars_per_line = 30  # Top with more space utilization
-                else:  # bottom
-                    max_chars_per_line = 32  # Bottom with better space utilization
-                
-                # Only wrap if text is longer than limit
-                if len(text) > max_chars_per_line:
-                    words = text.split()
-                    lines = []
-                    current_line = ""
-                    
-                    for word in words:
-                        # Test if adding this word would exceed the limit
-                        test_line = current_line + (" " if current_line else "") + word
-                        if len(test_line) <= max_chars_per_line:
-                            current_line = test_line
-                        else:
-                            # Current line is full, start new line
-                            if current_line:
-                                lines.append(current_line)
-                                current_line = word
-                            else:
-                                # Single word is too long, truncate it
-                                current_line = word[:max_chars_per_line-3] + "..."
-                    
-                    # Don't forget the last line
-                    if current_line:
-                        lines.append(current_line)
-                    
-                    # Limit to 2 lines max and join with actual newlines
-                    text = '\n'.join(lines[:2])
-                
-                # Create text clip with better error handling (MoviePy 2.x syntax)
-                try:
-                    clip_kwargs = {
-                        'text': text,
-                        'font_size': style.font_size,
-                        'color': style.font_color,
-                        'stroke_color': style.stroke_color,
-                        'stroke_width': style.stroke_width
-                    }
-                    
-                    # Only add font if specified (let MoviePy use system default otherwise)
-                    if style.font_family:
-                        clip_kwargs['font'] = style.font_family
-                    
-                    txt_clip = TextClip(**clip_kwargs).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
-                except Exception as clip_error:
-                    logger.exception(f"Failed to create TextClip with full options, trying minimal options: {clip_error}")
-                    # Fallback to minimal TextClip creation
-                    txt_clip = TextClip(
-                        text=text,
-                        font_size=style.font_size,
-                        color=style.font_color
-                    ).with_position(position).with_start(caption_info['start']).with_duration(caption_info['duration'])
-                
-                # Validate clip before adding
-                if txt_clip is None:
-                    logger.info(f"⚠️ TextClip creation returned None for: '{caption_info['text'][:20]}...'")
-                    continue
-                    
-                caption_clips.append(txt_clip)
-                
-            except Exception as e:
-                logger.exception(f"�  Failed to create caption '{caption_info['text'][:30]}...': {e}")
-                continue
-        
-        return caption_clips
-    
     def add_background_music(
         self, 
         music_path: str, 
@@ -1439,6 +1340,70 @@ class VideoClip:
             
         except Exception as e:
             logger.exception(f"L Narration audio failed: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def add_wikipedia_image(self, 
+                           image_path: str,
+                           duration: float = 5.0,
+                           fade_duration: float = 0.5) -> Dict[str, Any]:
+        """
+        Add a Wikipedia image overlay to the video.
+        
+        Args:
+            image_path: Path to the Wikipedia image file
+            duration: How long to display the image (seconds)
+            fade_duration: Duration of fade in/out effects
+            
+        Returns:
+            Dictionary with image addition results
+        """
+        try:
+            logger.info(f"🖼️ Adding Wikipedia image: {Path(image_path).name}")
+            
+            if not Path(image_path).exists():
+                raise FileNotFoundError(f"Image file not found: {image_path}")
+            
+            # Get target video dimensions
+            target_resolution = self.video_config.get_target_resolution()
+            video_width, video_height = target_resolution
+            
+            # Import image processor
+            from lib.video.image_processor import WikipediaImageProcessor
+            processor = WikipediaImageProcessor()
+            
+            # Create image clip
+            image_clip = processor.create_video_image_clip(
+                image_path=image_path,
+                video_width=video_width,
+                video_height=video_height,
+                duration=duration,
+                position="top_third",
+                fade_duration=fade_duration
+            )
+            
+            if not image_clip:
+                raise ValueError("Failed to create image clip")
+            
+            # Add to video components
+            self.video_components.append(image_clip)
+            self.wikipedia_image_duration = duration
+            
+            logger.info(f"Wikipedia image added successfully")
+            logger.debug(f"Image duration: {duration}s, fade: {fade_duration}s")
+            
+            return {
+                "success": True,
+                "image_path": image_path,
+                "duration": duration,
+                "fade_duration": fade_duration,
+                "dimensions": target_resolution
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to add Wikipedia image: {e}")
             return {
                 "success": False,
                 "error": str(e)

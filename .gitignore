@@ -8,3 +8,17 @@ moneytree.egg-info/
 __pycache__/
 .aider*
 sample_voices/
+
+# YouTube API credentials and tokens
+client_secrets.json
+youtube_token.json
+.env
+*.json.backup
+
+# Other credential files
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+

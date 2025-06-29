@@ -780,3 +780,6 @@ class AudioPostProcessor:
                     torchaudio.save(output_path, audio_tensor, sample_rate)
                 except:
                     raise RuntimeError("No suitable audio saving library available")
+
+if __name__ == "__main__":
+    breakpoint()

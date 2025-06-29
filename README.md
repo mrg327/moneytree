@@ -38,25 +38,31 @@ uv sync
 #### Complete Video Generation (Primary Demo)
 ```bash
 # Complete pipeline: Wikipedia → Text → Speech → Video with captions
-uv run python demo_video.py "Artificial Intelligence" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality medium --engine chattts
+uv run python -m tools.wikipedia_video --template downloads/videos/minecraft_parkour.mp4 --engine coqui --model jenny --music downloads/audio/Chat\ Roulette\ -\ Single\ Friend.mp3 --quality high --use-whisper --include-image "Donald Duck"
 
 # Quick test with low quality
-uv run python demo_video.py "Cat" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality low --engine chattts
+uv run python -m demo_video "Cat" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality low --engine chattts
 
 # Production quality video
-uv run python demo_video.py "Climate Change" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality high --engine chattts
+uv run python -m demo_video "Climate Change" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality high --engine chattts
 
 # Use rule-based content generation (faster, no LLM required)
-uv run python demo_video.py "Python programming" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
+uv run python -m demo_video "Python programming" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
+```
+
+#### YouTube Upload
+```bash
+# Upload generated video to YouTube
+uv run python -m tools.youtube_upload --client-secrets client_secrets.json --title "Donald Duck" --description "Enjoy some fun facts and history of Donald Duck" --privacy "public" --upload C:\Programming\moneytree\video_output\moneytree_video_1751217724.mp4
 ```
 
 #### Audio-Only Generation
 ```bash
 # Natural conversational speech
-uv run python demo_natural_tts.py "Python programming language" --engine chattts
+uv run python -m demo_natural_tts "Python programming language" --engine chattts
 
 # Professional synthetic speech
-uv run python demo_coqui_tts.py "Quantum Physics" --model fast_pitch
+uv run python -m demo_coqui_tts "Quantum Physics" --model fast_pitch
 ```
 
 ## Architecture
@@ -214,15 +220,15 @@ ollama serve
 
 ```bash
 # Run comprehensive test suite
-uv run python tests/run_all_tests.py
+uv run python -m tests.run_all_tests
 
 # Test individual components
-uv run python tests/wiki/test_wikipedia_crawler.py
-uv run python tests/tts/test_speech_generation.py
-uv run python tests/video/test_video_processing.py
+uv run python -m tests.wiki.test_wikipedia_crawler
+uv run python -m tests.tts.test_speech_generation
+uv run python -m tests.video.test_video_processing
 
 # Test full pipeline integration
-uv run python tests/integration/test_full_pipeline.py
+uv run python -m tests.integration.test_full_pipeline
 ```
 
 ## Performance Optimization
@@ -230,13 +236,13 @@ uv run python tests/integration/test_full_pipeline.py
 ### Fast Video Generation
 ```bash
 # Low quality for quick tests
-uv run python demo_video.py "Cat" --template downloads/videos/minecraft_parkour.mp4 --quality low
+uv run python -m demo_video "Cat" --template downloads/videos/minecraft_parkour.mp4 --quality low
 
 # Use rule-based content (no LLM required, faster)
-uv run python demo_video.py "Topic" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
+uv run python -m demo_video "Topic" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
 
 # Consistent voice for predictable output
-uv run python demo_video.py "Topic" --template downloads/videos/minecraft_parkour.mp4 --voice consistent
+uv run python -m demo_video "Topic" --template downloads/videos/minecraft_parkour.mp4 --voice consistent
 ```
 
 ## Troubleshooting

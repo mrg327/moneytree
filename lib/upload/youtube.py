@@ -12,6 +12,7 @@ from googleapiclient.http import MediaFileUpload
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+import mimetypes
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,14 @@ class YouTubeClient:
                     description: str = "",
                     tags: Optional[List[str]] = None,
                     privacy_status: str = "private",
-                    category_id: str = "22") -> Optional[Dict[str, Any]]:
+                    category_id: str = "22",
+                    default_language: Optional[str] = None,
+                    made_for_kids: Optional[bool] = None,
+                    contains_synthetic_media: bool = False,
+                    publish_at: Optional[str] = None,
+                    embeddable: bool = True,
+                    public_stats_viewable: bool = True,
+                    notify_subscribers: bool = True) -> Optional[Dict[str, Any]]:
         """Upload a video to YouTube.
         
         Args:
@@ -101,6 +109,13 @@ class YouTubeClient:
             tags: List of tags for the video
             privacy_status: Privacy setting (private, public, unlisted)
             category_id: YouTube category ID (22 = People & Blogs)
+            default_language: Default language of the video (ISO 639-1 code)
+            made_for_kids: Whether video is made for kids (COPPA compliance)
+            contains_synthetic_media: Whether video contains AI-generated content
+            publish_at: Scheduled publish time (ISO 8601 format)
+            embeddable: Whether video can be embedded on other websites
+            public_stats_viewable: Whether view count is publicly visible
+            notify_subscribers: Whether to notify channel subscribers
             
         Returns:
             Dictionary with upload response or None if failed
@@ -116,16 +131,36 @@ class YouTubeClient:
         try:
             tags = tags or []
             
+            # Build snippet with conditional fields
+            snippet = {
+                'title': title,
+                'description': description,
+                'tags': tags,
+                'categoryId': category_id
+            }
+            
+            if default_language:
+                snippet['defaultLanguage'] = default_language
+            
+            # Build status with conditional fields
+            status = {
+                'privacyStatus': privacy_status,
+                'embeddable': embeddable,
+                'publicStatsViewable': public_stats_viewable
+            }
+            
+            if made_for_kids is not None:
+                status['selfDeclaredMadeForKids'] = made_for_kids
+                
+            if contains_synthetic_media:
+                status['containsSyntheticMedia'] = contains_synthetic_media
+                
+            if publish_at:
+                status['publishAt'] = publish_at
+            
             body = {
-                'snippet': {
-                    'title': title,
-                    'description': description,
-                    'tags': tags,
-                    'categoryId': category_id
-                },
-                'status': {
-                    'privacyStatus': privacy_status
-                }
+                'snippet': snippet,
+                'status': status
             }
             
             media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
@@ -133,7 +168,8 @@ class YouTubeClient:
             request = self.youtube.videos().insert(
                 part=','.join(body.keys()),
                 body=body,
-                media_body=media
+                media_body=media,
+                notifySubscribers=notify_subscribers
             )
             
             response = request.execute()
@@ -204,6 +240,59 @@ class YouTubeClient:
             logger.error(f"Error updating video: {e}")
             return False
     
+    def set_thumbnail(self, video_id: str, thumbnail_path: str) -> bool:
+        """Upload a custom thumbnail for a video.
+        
+        Args:
+            video_id: YouTube video ID
+            thumbnail_path: Path to thumbnail image file (JPEG/PNG, max 2MB)
+            
+        Returns:
+            True if thumbnail upload successful, False otherwise
+        """
+        if not self.youtube or not self.credentials:
+            logger.error("Must authenticate with OAuth2 before setting thumbnails")
+            return False
+        
+        if not os.path.exists(thumbnail_path):
+            logger.error(f"Thumbnail file not found: {thumbnail_path}")
+            return False
+        
+        # Check file size (2MB limit)
+        file_size = os.path.getsize(thumbnail_path)
+        if file_size > 2 * 1024 * 1024:  # 2MB in bytes
+            logger.error(f"Thumbnail file too large: {file_size} bytes (max 2MB)")
+            return False
+        
+        # Check file type
+        mime_type, _ = mimetypes.guess_type(thumbnail_path)
+        if mime_type not in ['image/jpeg', 'image/png']:
+            logger.error(f"Invalid thumbnail format: {mime_type}. Must be JPEG or PNG")
+            return False
+        
+        try:
+            media = MediaFileUpload(
+                thumbnail_path,
+                mimetype=mime_type,
+                resumable=False
+            )
+            
+            request = self.youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=media
+            )
+            
+            response = request.execute()
+            logger.info(f"Thumbnail uploaded successfully for video {video_id}")
+            return True
+            
+        except HttpError as e:
+            logger.error(f"HTTP error uploading thumbnail: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error uploading thumbnail: {e}")
+            return False
+    
     def get_upload_status(self, video_id: str) -> Optional[Dict[str, Any]]:
         """Get upload and processing status of a video.
         
@@ -219,7 +308,7 @@ class YouTubeClient:
         
         try:
             response = self.youtube.videos().list(
-                part='status,processingDetails',
+                part='status,processingDetails,statistics',
                 id=video_id
             ).execute()
             
@@ -227,7 +316,25 @@ class YouTubeClient:
                 logger.error(f"Video not found: {video_id}")
                 return None
             
-            return response['items'][0]
+            video_data = response['items'][0]
+            
+            # Log detailed status information
+            status = video_data.get('status', {})
+            processing = video_data.get('processingDetails', {})
+            
+            logger.info(f"Video {video_id} status:")
+            logger.info(f"  Upload Status: {status.get('uploadStatus', 'Unknown')}")
+            logger.info(f"  Privacy Status: {status.get('privacyStatus', 'Unknown')}")
+            logger.info(f"  Processing Status: {processing.get('processingStatus', 'Unknown')}")
+            
+            if 'processingProgress' in processing:
+                progress = processing['processingProgress']
+                logger.info(f"  Processing Progress: {progress.get('partsProcessed', 0)}/{progress.get('partsTotal', 0)}")
+                if 'timeLeftMs' in progress:
+                    time_left_sec = int(progress['timeLeftMs']) / 1000
+                    logger.info(f"  Time Remaining: {time_left_sec:.1f} seconds")
+            
+            return video_data
             
         except HttpError as e:
             logger.error(f"HTTP error getting upload status: {e}")
@@ -235,6 +342,33 @@ class YouTubeClient:
         except Exception as e:
             logger.error(f"Error getting upload status: {e}")
             return None
+    
+    def get_quota_usage_estimate(self, operations: Dict[str, int]) -> int:
+        """Estimate quota usage for planned operations.
+        
+        Args:
+            operations: Dictionary with operation counts (e.g., {'upload': 1, 'thumbnail': 1})
+            
+        Returns:
+            Estimated quota units
+        """
+        quota_costs = {
+            'upload': 1600,
+            'thumbnail': 50,
+            'update': 50,
+            'list': 1,
+            'search': 100
+        }
+        
+        total_quota = 0
+        for operation, count in operations.items():
+            if operation in quota_costs:
+                cost = quota_costs[operation] * count
+                total_quota += cost
+                logger.info(f"Quota estimate: {operation} x{count} = {cost} units")
+        
+        logger.info(f"Total estimated quota usage: {total_quota} units")
+        return total_quota
     
     def get_channel_videos(self, channel_id: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch videos from a YouTube channel.

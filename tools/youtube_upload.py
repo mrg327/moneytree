@@ -71,6 +71,17 @@ def main():
     parser.add_argument("--client-secrets", type=str, help="Path to OAuth2 client secrets file")
     parser.add_argument("--token-file", type=str, default="youtube_token.json", help="Path to token file")
     
+    # Enhanced upload parameters
+    parser.add_argument("--language", type=str, help="Default language (ISO 639-1 code, e.g., 'en')")
+    parser.add_argument("--made-for-kids", action="store_true", help="Mark video as made for kids (COPPA compliance)")
+    parser.add_argument("--not-made-for-kids", action="store_true", help="Mark video as NOT made for kids")
+    parser.add_argument("--synthetic-media", action="store_true", help="Mark as containing AI-generated content")
+    parser.add_argument("--publish-at", type=str, help="Schedule publish time (ISO 8601 format)")
+    parser.add_argument("--no-embedding", action="store_true", help="Disable video embedding")
+    parser.add_argument("--hide-stats", action="store_true", help="Hide view count and stats")
+    parser.add_argument("--no-notifications", action="store_true", help="Don't notify subscribers")
+    parser.add_argument("--thumbnail", type=str, help="Path to custom thumbnail image (JPEG/PNG, max 2MB)")
+    
     args = parser.parse_args()
     
     setup_logging()
@@ -102,13 +113,30 @@ def main():
                 print("ERROR: Authentication failed")
                 sys.exit(1)
             
+            # Handle mutually exclusive kids options
+            made_for_kids = None
+            if args.made_for_kids and args.not_made_for_kids:
+                print("ERROR: Cannot specify both --made-for-kids and --not-made-for-kids")
+                sys.exit(1)
+            elif args.made_for_kids:
+                made_for_kids = True
+            elif args.not_made_for_kids:
+                made_for_kids = False
+            
             print(f"Uploading video: {args.upload}")
             result = client.upload_video(
                 video_path=args.upload,
                 title=args.title,
                 description=args.description,
                 tags=args.tags,
-                privacy_status=args.privacy
+                privacy_status=args.privacy,
+                default_language=args.language,
+                made_for_kids=made_for_kids,
+                contains_synthetic_media=args.synthetic_media,
+                publish_at=args.publish_at,
+                embeddable=not args.no_embedding,
+                public_stats_viewable=not args.hide_stats,
+                notify_subscribers=not args.no_notifications
             )
             
             if result:
@@ -116,6 +144,14 @@ def main():
                 print(f"Video ID: {result['id']}")
                 print(f"Title: {result['snippet']['title']}")
                 print(f"URL: https://www.youtube.com/watch?v={result['id']}")
+                
+                # Upload custom thumbnail if provided
+                if args.thumbnail:
+                    print(f"\nUploading custom thumbnail: {args.thumbnail}")
+                    if client.set_thumbnail(result['id'], args.thumbnail):
+                        print("✓ Thumbnail uploaded successfully")
+                    else:
+                        print("✗ Thumbnail upload failed")
                 
                 # Check upload status
                 print("\nChecking upload status...")

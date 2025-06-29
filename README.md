@@ -52,8 +52,30 @@ uv run python -m demo_video "Python programming" --template downloads/videos/min
 
 #### YouTube Upload
 ```bash
-# Upload generated video to YouTube
+# Basic upload to YouTube
 uv run python -m tools.youtube_upload --client-secrets client_secrets.json --title "Donald Duck" --description "Enjoy some fun facts and history of Donald Duck" --privacy "public" --upload C:\Programming\moneytree\video_output\moneytree_video_1751217724.mp4
+
+# Enhanced upload with quality features
+uv run python -m tools.youtube_upload \
+  --client-secrets client_secrets.json \
+  --upload video_output/quantum_physics_video.mp4 \
+  --title "Quantum Physics Explained - AI Generated" \
+  --description "Educational AI-generated content about quantum physics fundamentals" \
+  --tags "quantum physics" "education" "ai" "science" \
+  --privacy public \
+  --language en \
+  --synthetic-media \
+  --thumbnail thumbnails/quantum_physics.jpg \
+  --not-made-for-kids
+
+# Scheduled upload with custom settings
+uv run python -m tools.youtube_upload \
+  --client-secrets client_secrets.json \
+  --upload video_output/daily_facts.mp4 \
+  --title "Daily Science Facts #1" \
+  --publish-at "2024-01-15T10:00:00Z" \
+  --no-notifications \
+  --hide-stats
 ```
 
 #### Audio-Only Generation

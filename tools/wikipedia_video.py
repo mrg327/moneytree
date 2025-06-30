@@ -13,6 +13,8 @@ logger.info("Importing Modules")
 
 import sys
 import argparse
+import re
+import time
 from pathlib import Path
 
 logger.info("Importing: WikipediaCrawler")
@@ -29,6 +31,31 @@ logger.info("Importing: AudioDurationEstimator")
 from lib.audio.duration_estimator import AudioDurationEstimator
 
 # Setup logging
+
+
+def sanitize_topic_for_filename(topic: str) -> str:
+    """
+    Sanitize a topic name to be safe for use in filenames.
+    
+    Args:
+        topic: The topic name to sanitize
+        
+    Returns:
+        A filename-safe version of the topic
+    """
+    # Remove or replace problematic characters
+    sanitized = re.sub(r'[^\w\s-]', '', topic)  # Remove special chars except word chars, spaces, hyphens
+    sanitized = re.sub(r'\s+', '_', sanitized)  # Replace spaces with underscores
+    sanitized = re.sub(r'_+', '_', sanitized)   # Replace multiple underscores with single
+    sanitized = sanitized.strip('_')            # Remove leading/trailing underscores
+    
+    # Limit length and ensure it's not empty
+    if len(sanitized) > 50:
+        sanitized = sanitized[:50].rstrip('_')
+    if not sanitized:
+        sanitized = "unknown_topic"
+    
+    return sanitized
 
 
 def main():
@@ -362,9 +389,16 @@ def main():
                 vertical_format=(args.format == 'vertical')
             )
             
+            # Generate custom output path with topic name
+            topic_title = content.get('title', args.topic)
+            sanitized_topic = sanitize_topic_for_filename(topic_title)
+            timestamp = int(time.time())
+            custom_output_path = f"video_output/{sanitized_topic}_{timestamp}.mp4"
+            
             # Render final video
             logger.info("Rendering final video")
-            render_result = video_clip.render_video(config=video_config)
+            logger.info(f"Custom filename: {sanitized_topic}_{timestamp}.mp4")
+            render_result = video_clip.render_video(output_path=custom_output_path, config=video_config)
             
             if render_result['success']:
                 logger.info("Video rendered successfully!")

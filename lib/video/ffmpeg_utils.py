@@ -154,10 +154,10 @@ class FFmpegUtils:
     
     def detect_gpu_encoders(self) -> Dict[str, bool]:
         """
-        Detect available GPU encoders.
+        Detect available GPU encoders that actually work with MoviePy.
         
         Returns:
-            Dictionary with encoder availability
+            Dictionary with encoder availability tested for MoviePy compatibility
         """
         encoders = {
             'h264_nvenc': False,    # NVIDIA NVENC
@@ -167,17 +167,19 @@ class FFmpegUtils:
         }
         
         try:
-            # Get list of available encoders
+            # First check if encoders are listed
             cmd = [self.ffmpeg_path, "-hide_banner", "-encoders"]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            
             encoder_list = result.stdout
             
-            # Check for each encoder
-            for encoder in encoders.keys():
+            # Test each encoder with a small test encode to verify MoviePy compatibility
+            for encoder in list(encoders.keys()):
                 if encoder in encoder_list:
-                    encoders[encoder] = True
-                    logger.debug(f"Found GPU encoder: {encoder}")
+                    if self._test_encoder_compatibility(encoder):
+                        encoders[encoder] = True
+                        logger.debug(f"Verified working GPU encoder: {encoder}")
+                    else:
+                        logger.debug(f"GPU encoder found but not compatible with MoviePy: {encoder}")
             
             available_count = sum(encoders.values())
             logger.info(f"GPU encoders available: {available_count}/4")
@@ -187,6 +189,57 @@ class FFmpegUtils:
         except Exception as e:
             logger.warning(f"Failed to detect GPU encoders: {e}")
             return encoders
+    
+    def _test_encoder_compatibility(self, encoder: str) -> bool:
+        """
+        Test if an encoder actually works by trying a small test encode.
+        
+        Args:
+            encoder: Encoder name to test
+            
+        Returns:
+            True if encoder works, False otherwise
+        """
+        try:
+            # Create a minimal test video (1 frame, 1 second)
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
+                test_output = tmp_file.name
+            
+            # Minimal test encode command
+            cmd = [
+                self.ffmpeg_path,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "lavfi",
+                "-i", "testsrc=duration=0.1:size=64x64:rate=1",
+                "-c:v", encoder,
+                "-t", "0.1",
+                "-y",
+                test_output
+            ]
+            
+            # Add encoder-specific parameters if needed
+            if encoder == 'h264_nvenc':
+                cmd.extend(["-preset", "fast"])
+            elif encoder == 'h264_qsv':
+                cmd.extend(["-preset", "fast"])
+            
+            # Try the encode with a short timeout
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            # Clean up test file
+            try:
+                os.unlink(test_output)
+            except:
+                pass
+            
+            # Check if encode succeeded
+            return result.returncode == 0
+            
+        except Exception as e:
+            logger.debug(f"Encoder test failed for {encoder}: {e}")
+            return False
     
     def get_best_encoder(self, prefer_gpu: bool = True) -> Tuple[str, Dict[str, Any]]:
         """
@@ -215,33 +268,29 @@ class FFmpegUtils:
         return 'libx264', self._get_cpu_encoder_settings()
     
     def _get_gpu_encoder_settings(self, encoder: str) -> Dict[str, Any]:
-        """Get optimized settings for GPU encoders."""
+        """Get optimized settings for GPU encoders compatible with MoviePy."""
         base_settings = {
             'preset': 'fast',
-            'crf': 23,  # Good quality/speed balance
             'threads': 0,
         }
         
         if encoder == 'h264_nvenc':
+            # MoviePy-compatible NVENC settings
             return {
                 **base_settings,
-                'preset': 'p4',  # NVENC fast preset
-                'tune': 'hq',    # High quality
-                'rc': 'vbr',     # Variable bitrate
-                'cq': 23,        # Quality level
-                'gpu': 0,        # Use first GPU
+                'preset': 'fast',    # Use standard preset for MoviePy compatibility
+                'bitrate': '5000k',  # Use bitrate instead of CRF for GPU encoders
             }
         elif encoder == 'h264_qsv':
             return {
                 **base_settings,
                 'preset': 'fast',
-                'global_quality': 23,
+                'bitrate': '5000k',
             }
         elif encoder == 'h264_vaapi':
             return {
                 **base_settings,
-                'qp': 23,
-                'quality': 'balanced',
+                'bitrate': '5000k',
             }
         
         return base_settings

@@ -36,7 +36,7 @@ class CoquiTTSConfig:
     output_format: str = "wav"
     sample_rate: int = 22050
     quality: str = "medium"  # low, medium, high
-    device: str = "cpu"  # cpu or cuda
+    device: str = None  # auto-detect, or specify "cpu" or "cuda"
     
     # XTTS-v2 specific parameters
     use_xtts: bool = False  # Enable XTTS-v2 voice cloning
@@ -127,6 +127,29 @@ class CoquiSpeechGenerator:
         
         self._initialize_tts()
     
+    def _detect_best_device(self) -> str:
+        """
+        Auto-detect the best available device for TTS.
+        
+        Returns:
+            "cuda" if GPU available, "cpu" otherwise
+        """
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_count = torch.cuda.device_count()
+                gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "Unknown"
+                print(f"🚀 GPU detected: {gpu_name}")
+                print(f"   CUDA devices available: {gpu_count}")
+                return "cuda"
+        except ImportError:
+            print("📦 PyTorch not available, cannot detect CUDA")
+        except Exception as e:
+            print(f"⚠️ GPU detection failed: {e}")
+        
+        print("🖥️  Using CPU for TTS")
+        return "cpu"
+    
     def _initialize_tts(self):
         """Initialize the Coqui TTS engine with XTTS-v2 support."""
         if not HAS_TTS:
@@ -134,6 +157,10 @@ class CoquiSpeechGenerator:
             return
         
         try:
+            # Auto-detect best device if not specified
+            if self.config.device is None:
+                self.config.device = self._detect_best_device()
+            
             print(f"🤖 Initializing Coqui TTS...")
             print(f"   Model: {self.config.model_name}")
             print(f"   Device: {self.config.device}")

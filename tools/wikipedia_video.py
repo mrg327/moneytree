@@ -248,8 +248,8 @@ def main():
                 }
                 
                 tts_config = CoquiTTSConfig(
-                    model_name=model_map[args.model],
-                    device='cpu'
+                    model_name=model_map[args.model]
+                    # device auto-detected (GPU if available, CPU otherwise)
                 )
             
             speech_gen = CoquiSpeechGenerator(tts_config)

@@ -1698,7 +1698,22 @@ class VideoClip:
             
             # Apply encoder-specific settings
             base_settings['codec'] = codec
-            base_settings.update(encoder_settings)
+            
+            # Handle ffmpeg-specific parameters properly
+            ffmpeg_params = []
+            moviepy_params = {}
+            
+            for key, value in encoder_settings.items():
+                if key in ['crf', 'tune']:
+                    # These are FFmpeg-specific and should go in ffmpeg_params
+                    ffmpeg_params.extend([f'-{key}', str(value)])
+                else:
+                    # These can be passed directly to MoviePy
+                    moviepy_params[key] = value
+            
+            base_settings.update(moviepy_params)
+            if ffmpeg_params:
+                base_settings['ffmpeg_params'] = ffmpeg_params
             
             if codec.endswith('_nvenc'):
                 logger.info("🚀 Using NVIDIA GPU acceleration for video encoding")
@@ -1715,8 +1730,7 @@ class VideoClip:
             base_settings.update({
                 'codec': 'libx264',
                 'preset': 'fast',  # Faster than 'medium'
-                'crf': 23,         # Good quality/speed balance
-                'tune': 'fastdecode',
+                'ffmpeg_params': ['-crf', '23', '-tune', 'fastdecode'],  # FFmpeg-specific params
             })
         
         return base_settings

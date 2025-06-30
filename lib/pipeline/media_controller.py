@@ -13,6 +13,7 @@ from pathlib import Path
 from lib.utils.logging_config import get_logger
 from lib.audio.duration_estimator import AudioDurationEstimator, AudioEstimate
 from lib.audio.quality_validator import AudioQualityValidator
+from lib.video.ffmpeg_utils import FFmpegUtils, FFmpegError
 
 logger = get_logger(__name__)
 
@@ -36,6 +37,8 @@ class MediaConfig:
         max_template_duration: Maximum template duration to process
         enable_background_music_optimization: Whether to optimize background music processing
         temp_dir: Directory for temporary files
+        enable_resolution_optimization: Whether to optimize template resolution for processing
+        max_processing_resolution: Maximum resolution for processing (width, height)
     """
     enable_early_trimming: bool = True
     buffer_factor: float = 1.15  # 15% buffer for safety
@@ -43,6 +46,8 @@ class MediaConfig:
     max_template_duration: float = 300.0  # 5 minutes max
     enable_background_music_optimization: bool = True
     temp_dir: str = "temp_media"
+    enable_resolution_optimization: bool = True
+    max_processing_resolution: Tuple[int, int] = (1920, 1080)  # 1080p max for processing
 
 
 class MediaController:
@@ -64,11 +69,22 @@ class MediaController:
         self.duration_estimator = AudioDurationEstimator()
         self.quality_validator = AudioQualityValidator()
         
+        # Initialize FFmpeg utilities for fast video operations
+        try:
+            self.ffmpeg_utils = FFmpegUtils()
+            self.use_fast_trimming = True
+            logger.info("FFmpeg utilities initialized for fast video operations")
+        except FFmpegError as e:
+            self.ffmpeg_utils = None
+            self.use_fast_trimming = False
+            logger.warning(f"FFmpeg not available, falling back to MoviePy: {e}")
+        
         # Ensure temp directory exists
         self.temp_dir = Path(self.config.temp_dir)
         self.temp_dir.mkdir(exist_ok=True)
         
         logger.info(f"MediaController initialized with early trimming: {self.config.enable_early_trimming}")
+        logger.info(f"Fast trimming enabled: {self.use_fast_trimming}")
     
     def process_content_optimized(self, content: Dict[str, Any], tts_engine: str,
                                 template_path: str, music_path: Optional[str] = None) -> Dict[str, Any]:
@@ -106,6 +122,12 @@ class MediaController:
         if self.config.enable_early_trimming and HAS_VIDEO:
             processed_template_path = self._pre_trim_template_video(
                 template_path, buffer_duration, optimization_metrics
+            )
+        
+        # Step 2.5: Optimize template resolution for processing
+        if self.config.enable_resolution_optimization and HAS_VIDEO:
+            processed_template_path = self._optimize_template_resolution(
+                processed_template_path, optimization_metrics
             )
         
         # Step 3: Pre-process background music if provided
@@ -231,39 +253,75 @@ class MediaController:
             Path to pre-trimmed template video
         """
         try:
-            # Load template to get original duration
-            template_clip = VideoFileClip(template_path)
-            original_duration = template_clip.duration
+            # Get original duration using fast method
+            if self.use_fast_trimming and self.ffmpeg_utils:
+                # Use FFmpeg for fast duration check
+                info = self.ffmpeg_utils.get_video_info(template_path)
+                original_duration = info['duration']
+                
+                if original_duration <= target_duration:
+                    logger.info(f"Template duration ({original_duration:.1f}s) <= target ({target_duration:.1f}s), no pre-trimming needed")
+                    return template_path
+                
+                # Calculate savings
+                duration_saved = original_duration - target_duration
+                processing_time_saved = duration_saved * 25.0  # Much higher savings with fast trimming
+                
+                # Create pre-trimmed version using fast stream copying
+                trimmed_path = self.temp_dir / f"pre_trimmed_{Path(template_path).name}"
+                
+                logger.info(f"Pre-trimming template: {original_duration:.1f}s -> {target_duration:.1f}s")
+                logger.info(f"Estimated processing time saved: {processing_time_saved:.1f}s")
+                
+                # Fast trim using stream copying (no re-encoding)
+                success = self.ffmpeg_utils.trim_video_fast(
+                    template_path, str(trimmed_path), 
+                    start_time=0.0, duration=target_duration
+                )
+                
+                if success:
+                    # Update metrics
+                    metrics['resources_saved']['video_duration'] = duration_saved
+                    metrics['processing_time_saved'] += processing_time_saved
+                    return str(trimmed_path)
+                else:
+                    logger.warning("Fast trimming failed, falling back to MoviePy")
             
-            if original_duration <= target_duration:
-                # No trimming needed
+            # Fallback to MoviePy if FFmpeg fails or is unavailable
+            if HAS_VIDEO:
+                template_clip = VideoFileClip(template_path)
+                original_duration = template_clip.duration
+                
+                if original_duration <= target_duration:
+                    template_clip.close()
+                    logger.info(f"Template duration ({original_duration:.1f}s) <= target ({target_duration:.1f}s), no pre-trimming needed")
+                    return template_path
+                
+                # Calculate savings
+                duration_saved = original_duration - target_duration
+                processing_time_saved = duration_saved * 2.5  # Lower savings with slow trimming
+                
+                # Create pre-trimmed version
+                trimmed_path = self.temp_dir / f"pre_trimmed_{Path(template_path).name}"
+                
+                logger.info(f"Pre-trimming template (MoviePy): {original_duration:.1f}s -> {target_duration:.1f}s")
+                logger.warning("Using slow MoviePy trimming - consider installing FFmpeg for 10x speedup")
+                
+                # Trim and save
+                trimmed_clip = template_clip.subclipped(0, target_duration)
+                trimmed_clip.write_videofile(str(trimmed_path), logger=None)
+                
+                # Cleanup
+                trimmed_clip.close()
                 template_clip.close()
-                logger.info(f"Template duration ({original_duration:.1f}s) <= target ({target_duration:.1f}s), no pre-trimming needed")
-                return template_path
+                
+                # Update metrics
+                metrics['resources_saved']['video_duration'] = duration_saved
+                metrics['processing_time_saved'] += processing_time_saved
+                
+                return str(trimmed_path)
             
-            # Calculate savings
-            duration_saved = original_duration - target_duration
-            processing_time_saved = duration_saved * 2.5  # Rough estimate: 2.5x processing time
-            
-            # Create pre-trimmed version
-            trimmed_path = self.temp_dir / f"pre_trimmed_{Path(template_path).name}"
-            
-            logger.info(f"Pre-trimming template: {original_duration:.1f}s -> {target_duration:.1f}s")
-            logger.info(f"Estimated processing time saved: {processing_time_saved:.1f}s")
-            
-            # Trim and save
-            trimmed_clip = template_clip.subclipped(0, target_duration)
-            trimmed_clip.write_videofile(str(trimmed_path), logger=None)
-            
-            # Cleanup
-            trimmed_clip.close()
-            template_clip.close()
-            
-            # Update metrics
-            metrics['resources_saved']['video_duration'] = duration_saved
-            metrics['processing_time_saved'] += processing_time_saved
-            
-            return str(trimmed_path)
+            return template_path
             
         except Exception as e:
             logger.error(f"Failed to pre-trim template video: {e}")
@@ -283,7 +341,42 @@ class MediaController:
             Path to pre-trimmed music file
         """
         try:
-            # Load music to get original duration
+            # Try fast audio trimming first
+            if self.use_fast_trimming and self.ffmpeg_utils:
+                # Get duration quickly using FFmpeg
+                try:
+                    info = self.ffmpeg_utils.get_video_info(music_path)
+                    original_duration = info['duration']
+                    
+                    if original_duration <= target_duration:
+                        logger.info(f"Music duration ({original_duration:.1f}s) <= target ({target_duration:.1f}s), no pre-trimming needed")
+                        return music_path
+                    
+                    # Calculate savings
+                    duration_saved = original_duration - target_duration
+                    
+                    # Create pre-trimmed version using fast stream copying
+                    trimmed_path = self.temp_dir / f"pre_trimmed_{Path(music_path).name}"
+                    
+                    logger.info(f"Pre-trimming background music: {original_duration:.1f}s -> {target_duration:.1f}s")
+                    
+                    # Fast trim using stream copying
+                    success = self.ffmpeg_utils.trim_audio_fast(
+                        music_path, str(trimmed_path),
+                        start_time=0.0, duration=target_duration
+                    )
+                    
+                    if success:
+                        # Update metrics
+                        metrics['resources_saved']['music_duration'] = duration_saved
+                        return str(trimmed_path)
+                    else:
+                        logger.warning("Fast audio trimming failed, falling back to MoviePy")
+                        
+                except Exception as e:
+                    logger.warning(f"FFmpeg audio trimming failed: {e}, falling back to MoviePy")
+            
+            # Fallback to MoviePy
             music_clip = AudioFileClip(music_path)
             original_duration = music_clip.duration
             
@@ -299,7 +392,7 @@ class MediaController:
             # Create pre-trimmed version
             trimmed_path = self.temp_dir / f"pre_trimmed_{Path(music_path).name}"
             
-            logger.info(f"Pre-trimming background music: {original_duration:.1f}s -> {target_duration:.1f}s")
+            logger.info(f"Pre-trimming background music (MoviePy): {original_duration:.1f}s -> {target_duration:.1f}s")
             
             # Trim and save
             trimmed_clip = music_clip.subclipped(0, target_duration)
@@ -330,30 +423,181 @@ class MediaController:
             Path to final trimmed template
         """
         try:
-            template_clip = VideoFileClip(template_path)
-            current_duration = template_clip.duration
+            # Try fast trimming first
+            if self.use_fast_trimming and self.ffmpeg_utils:
+                # Get current duration quickly
+                info = self.ffmpeg_utils.get_video_info(template_path)
+                current_duration = info['duration']
+                
+                if current_duration <= actual_duration:
+                    return template_path
+                
+                # Create final trimmed version using fast stream copying
+                final_path = self.temp_dir / f"final_trimmed_{Path(template_path).name}"
+                
+                logger.info(f"Final template trim: {current_duration:.1f}s -> {actual_duration:.1f}s")
+                
+                # Fast trim using stream copying (no re-encoding)
+                success = self.ffmpeg_utils.trim_video_fast(
+                    template_path, str(final_path),
+                    start_time=0.0, duration=actual_duration
+                )
+                
+                if success:
+                    return str(final_path)
+                else:
+                    logger.warning("Fast final trimming failed, falling back to MoviePy")
             
-            if current_duration <= actual_duration:
+            # Fallback to MoviePy if FFmpeg fails
+            if HAS_VIDEO:
+                template_clip = VideoFileClip(template_path)
+                current_duration = template_clip.duration
+                
+                if current_duration <= actual_duration:
+                    template_clip.close()
+                    return template_path
+                
+                # Create final trimmed version
+                final_path = self.temp_dir / f"final_trimmed_{Path(template_path).name}"
+                
+                logger.info(f"Final template trim (MoviePy): {current_duration:.1f}s -> {actual_duration:.1f}s")
+                logger.warning("Using slow MoviePy trimming - consider installing FFmpeg for 10x speedup")
+                
+                # Trim and save
+                final_clip = template_clip.subclipped(0, actual_duration)
+                final_clip.write_videofile(str(final_path), logger=None)
+                
+                # Cleanup
+                final_clip.close()
                 template_clip.close()
-                return template_path
+                
+                return str(final_path)
             
-            # Create final trimmed version
-            final_path = self.temp_dir / f"final_trimmed_{Path(template_path).name}"
-            
-            logger.info(f"Final template trim: {current_duration:.1f}s -> {actual_duration:.1f}s")
-            
-            # Trim and save
-            final_clip = template_clip.subclipped(0, actual_duration)
-            final_clip.write_videofile(str(final_path), logger=None)
-            
-            # Cleanup
-            final_clip.close()
-            template_clip.close()
-            
-            return str(final_path)
+            return template_path
             
         except Exception as e:
             logger.error(f"Failed to apply final trim: {e}")
+            return template_path
+    
+    def _optimize_template_resolution(self, template_path: str, metrics: Dict[str, Any]) -> str:
+        """
+        Optimize template resolution for processing to prevent 4K performance issues.
+        
+        Args:
+            template_path: Path to template video
+            metrics: Optimization metrics to update
+            
+        Returns:
+            Path to resolution-optimized template
+        """
+        try:
+            # Get video info to check resolution
+            if self.use_fast_trimming and self.ffmpeg_utils:
+                info = self.ffmpeg_utils.get_video_info(template_path)
+                
+                # Extract resolution from video streams
+                current_resolution = None
+                for stream in info.get('streams', []):
+                    if stream.get('codec_type') == 'video':
+                        width = stream.get('width')
+                        height = stream.get('height')
+                        if width and height:
+                            current_resolution = (width, height)
+                            break
+                
+                if not current_resolution:
+                    logger.warning("Could not determine video resolution, skipping optimization")
+                    return template_path
+                
+                max_res = self.config.max_processing_resolution
+                current_pixels = current_resolution[0] * current_resolution[1]
+                max_pixels = max_res[0] * max_res[1]
+                
+                # Check if resolution optimization is needed
+                if current_pixels <= max_pixels:
+                    logger.info(f"Template resolution {current_resolution} is within limits, no optimization needed")
+                    return template_path
+                
+                # Calculate optimization benefits
+                pixel_reduction = (current_pixels - max_pixels) / current_pixels
+                processing_speedup = current_pixels / max_pixels  # Approximate speedup
+                
+                logger.info(f"Template resolution optimization needed: {current_resolution} -> {max_res}")
+                logger.info(f"Estimated processing speedup: {processing_speedup:.1f}x")
+                
+                # Create optimized resolution version
+                optimized_path = self.temp_dir / f"optimized_res_{Path(template_path).name}"
+                
+                # Use FFmpeg for fast resolution scaling
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-i", template_path,
+                    "-vf", f"scale={max_res[0]}:{max_res[1]}:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-c:a", "copy",  # Copy audio stream
+                    "-y",
+                    str(optimized_path)
+                ]
+                
+                import subprocess
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                
+                # Update metrics
+                metrics['resources_saved']['resolution_optimization'] = {
+                    'original_resolution': current_resolution,
+                    'optimized_resolution': max_res,
+                    'pixel_reduction_percent': pixel_reduction * 100,
+                    'estimated_speedup': processing_speedup
+                }
+                metrics['processing_time_saved'] += processing_speedup * 60  # Rough estimate
+                
+                logger.info(f"✅ Template resolution optimized: {pixel_reduction:.1%} fewer pixels to process")
+                return str(optimized_path)
+                
+            else:
+                # Fallback to MoviePy if FFmpeg not available
+                logger.warning("FFmpeg not available for resolution optimization, using MoviePy fallback")
+                template_clip = VideoFileClip(template_path)
+                current_resolution = template_clip.size
+                max_res = self.config.max_processing_resolution
+                
+                current_pixels = current_resolution[0] * current_resolution[1]
+                max_pixels = max_res[0] * max_res[1]
+                
+                if current_pixels <= max_pixels:
+                    template_clip.close()
+                    return template_path
+                
+                # MoviePy resolution optimization (slower but works)
+                optimized_path = self.temp_dir / f"optimized_res_{Path(template_path).name}"
+                
+                logger.info(f"Optimizing resolution (MoviePy): {current_resolution} -> {max_res}")
+                resized_clip = template_clip.resized(max_res)
+                resized_clip.write_videofile(str(optimized_path), logger=None)
+                
+                # Cleanup
+                resized_clip.close()
+                template_clip.close()
+                
+                # Update metrics
+                pixel_reduction = (current_pixels - max_pixels) / current_pixels
+                processing_speedup = current_pixels / max_pixels
+                
+                metrics['resources_saved']['resolution_optimization'] = {
+                    'original_resolution': current_resolution,
+                    'optimized_resolution': max_res,
+                    'pixel_reduction_percent': pixel_reduction * 100,
+                    'estimated_speedup': processing_speedup
+                }
+                
+                return str(optimized_path)
+                
+        except Exception as e:
+            logger.error(f"Failed to optimize template resolution: {e}")
             return template_path
     
     def _get_recommended_tts_config(self, audio_estimate: AudioEstimate, engine: str) -> Dict[str, Any]:

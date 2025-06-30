@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lib.utils.logging_config import get_logger, LoggedOperation, log_execution_time
+from lib.video.ffmpeg_utils import FFmpegUtils, FFmpegError
 
 logger = get_logger(__name__)
 
@@ -1474,16 +1475,8 @@ class VideoClip:
             else:
                 logger.info("No captions to add")
             
-            # Use minimal render settings to avoid issues
-            render_kwargs = {
-                'fps': 24,  # Standard FPS
-                'codec': 'libx264',
-                'audio_codec': 'aac',
-                'preset': 'medium',  # Balanced preset
-                'logger': None,
-                'temp_audiofile': 'temp-audio.m4a',  # Explicit temp audio file
-                'remove_temp': True  # Clean up temp files
-            }
+            # Get optimized render settings with GPU acceleration
+            render_kwargs = self._get_optimized_render_settings(config)
             
             # Render video with minimal settings
             logger.info(f"Saving to: {output_path}")
@@ -1678,6 +1671,55 @@ class VideoClip:
             
         except Exception as e:
             logger.exception(f"�  Cleanup warning: {e}")
+    
+    def _get_optimized_render_settings(self, config: VideoConfig) -> Dict[str, Any]:
+        """
+        Get optimized render settings with GPU acceleration if available.
+        
+        Args:
+            config: Video output configuration
+            
+        Returns:
+            Dictionary with optimized render settings
+        """
+        base_settings = {
+            'fps': config.fps or 24,
+            'audio_codec': 'aac',
+            'logger': None,
+            'temp_audiofile': 'temp-audio.m4a',
+            'remove_temp': True,
+            'threads': 0,  # Auto-detect threads
+        }
+        
+        # Try to use GPU acceleration
+        try:
+            ffmpeg_utils = FFmpegUtils()
+            codec, encoder_settings = ffmpeg_utils.get_best_encoder(prefer_gpu=True)
+            
+            # Apply encoder-specific settings
+            base_settings['codec'] = codec
+            base_settings.update(encoder_settings)
+            
+            if codec.endswith('_nvenc'):
+                logger.info("🚀 Using NVIDIA GPU acceleration for video encoding")
+            elif codec.endswith('_qsv'):
+                logger.info("🚀 Using Intel Quick Sync GPU acceleration for video encoding")
+            elif codec.endswith('_vaapi'):
+                logger.info("🚀 Using VAAPI GPU acceleration for video encoding")
+            else:
+                logger.info(f"⚡ Using optimized CPU encoding: {codec}")
+            
+        except Exception as e:
+            # Fallback to optimized CPU settings
+            logger.warning(f"GPU acceleration unavailable, using optimized CPU settings: {e}")
+            base_settings.update({
+                'codec': 'libx264',
+                'preset': 'fast',  # Faster than 'medium'
+                'crf': 23,         # Good quality/speed balance
+                'tune': 'fastdecode',
+            })
+        
+        return base_settings
     
     def __enter__(self):
         """Context manager entry."""

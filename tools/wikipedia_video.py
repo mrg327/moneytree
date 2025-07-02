@@ -87,6 +87,8 @@ def main():
     parser.add_argument('--language', default='en', help='Language for XTTS-v2 generation')
     parser.add_argument('--include-image', action='store_true',
                        help='Include Wikipedia page image in video (displayed in top third for first 5 seconds)')
+    parser.add_argument('--single-word-captions', action='store_true',
+                       help='Display captions one word at a time in center of screen (TikTok-style)')
     
     args = parser.parse_args()
     
@@ -335,8 +337,11 @@ def main():
                 logger.info(f"Using optimized music: {Path(optimized_music).name}")
             
             with VideoClip(optimized_template) as video_clip:
-                # Configure caption style based on format
-                if args.format == 'vertical':
+                # Configure caption style based on format and options
+                if args.single_word_captions:
+                    caption_style = CaptionStyle.for_single_word(font_size=90)
+                    logger.debug(f"Using single-word caption style: {caption_style.words_per_caption} word per caption")
+                elif args.format == 'vertical':
                     caption_style = CaptionStyle.for_vertical_video(font_size=110)
                     logger.debug(f"Using vertical caption style: {caption_style.words_per_caption} words per line")
                 else:

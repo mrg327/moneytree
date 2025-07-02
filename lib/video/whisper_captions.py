@@ -290,7 +290,8 @@ class WhisperCaptionGenerator:
                 'end': caption.end_time,
                 'duration': caption.duration,
                 'confidence': caption.confidence,
-                'word_count': len(caption.words)
+                'word_count': len(caption.words),
+                'words': caption.words  # Include word-level timing data for single-word captions
             })
         
         return timing_data

@@ -55,6 +55,11 @@ class CaptionStyle:
     enable_fallback: bool = True  # Enable automatic fallback between renderers
     quality_priority: bool = False  # Prioritize quality over speed
     
+    # Timing configuration (for single-word captions)
+    min_word_duration: float = 0.1  # Minimum duration per word (seconds)
+    max_word_duration: float = 1.5  # Maximum duration per word (seconds)
+    timing_mode: str = 'responsive'  # 'responsive', 'relaxed', 'rapid'
+    
     @classmethod
     def for_vertical_video(cls, font_size: int = 36) -> 'CaptionStyle':
         """Create caption style optimized for vertical videos (TikTok/YT Shorts)."""
@@ -101,6 +106,27 @@ class CaptionStyle:
             font_family=None,
             stroke_color='black',
             stroke_width=2
+        )
+    
+    @classmethod
+    def for_single_word(cls, font_size: int = 54) -> 'CaptionStyle':
+        """Create caption style optimized for single-word display."""
+        return cls(
+            font_size=font_size,
+            font_color='white',
+            bg_color='black',
+            bg_opacity=0.8,
+            position='center',  # Fixed center position for consistency
+            max_width=85,  # Reduced width since single words are typically shorter
+            words_per_caption=1,  # Single word per caption
+            font_family=None,
+            stroke_color='black',
+            stroke_width=3,  # Slightly thicker stroke for emphasis
+            preferred_renderer='opencv_pil',  # OpenCV renderer for precise word-level control
+            quality_priority=True,  # Prioritize quality for single-word emphasis
+            min_word_duration=0.08,  # Very fast minimum for rapid-fire display
+            max_word_duration=1.0,   # Prevent words from lingering too long
+            timing_mode='rapid'      # Use rapid timing mode
         )
 
 
@@ -435,12 +461,23 @@ class VideoClip:
                 logger.warning("Whisper failed to generate captions")
                 return []
             
-            # Adjust timing for readability
-            adjusted_segments = generator.adjust_caption_timing(
-                caption_segments,
-                min_duration=1.0,
-                max_duration=5.0
-            )
+            # Adjust timing for readability (different constraints for single-word captions)
+            if style.words_per_caption == 1:
+                # Single-word captions: use configurable timing constraints
+                min_dur = style.min_word_duration if hasattr(style, 'min_word_duration') else 0.08
+                max_dur = style.max_word_duration if hasattr(style, 'max_word_duration') else 1.0
+                adjusted_segments = generator.adjust_caption_timing(
+                    caption_segments,
+                    min_duration=min_dur,
+                    max_duration=max_dur
+                )
+            else:
+                # Multi-word captions: use standard constraints
+                adjusted_segments = generator.adjust_caption_timing(
+                    caption_segments,
+                    min_duration=1.0,
+                    max_duration=5.0
+                )
             
             # Convert to MoviePy format
             timing_data = generator.generate_moviepy_timing_data(adjusted_segments)
@@ -608,6 +645,10 @@ class VideoClip:
         """
         caption_clips = []
         
+        # Handle single-word captions differently
+        if style.words_per_caption == 1:
+            return self._create_single_word_caption_clips(timing_data, style, width, height)
+        
         for caption_info in timing_data:
             try:
                 # Maximize horizontal space utilization - use 99% of available width
@@ -649,6 +690,129 @@ class VideoClip:
         
         logger.info(f"✅ Created {len(caption_clips)} caption clips with no text dropped")
         return caption_clips
+    
+    def _create_single_word_caption_clips(
+        self, 
+        timing_data: List[Dict[str, Any]], 
+        style: CaptionStyle, 
+        width: int, 
+        height: int
+    ) -> List[Any]:
+        """
+        Create individual caption clips for each word (single-word caption style).
+        
+        Args:
+            timing_data: List of caption timing information with word-level data
+            style: Caption styling options (must have words_per_caption=1)
+            width: Video width
+            height: Video height
+            
+        Returns:
+            List of TextClip objects for single-word captions
+        """
+        caption_clips = []
+        
+        for caption_info in timing_data:
+            try:
+                # Use word-level timing if available (from Whisper)
+                if 'words' in caption_info and caption_info['words']:
+                    # Use precise word-level timing from Whisper
+                    for word_info in caption_info['words']:
+                        word_text = word_info.get('word', '').strip()
+                        if not word_text:
+                            continue
+                            
+                        start_time = word_info.get('start', 0.0)
+                        end_time = word_info.get('end', start_time + 0.5)
+                        duration = end_time - start_time
+                        
+                        # Ensure minimum duration for readability (configurable for rapid-fire display)
+                        min_dur = style.min_word_duration if hasattr(style, 'min_word_duration') else 0.08
+                        max_dur = style.max_word_duration if hasattr(style, 'max_word_duration') else 1.0
+                        
+                        if duration < min_dur:
+                            duration = min_dur
+                            end_time = start_time + duration
+                        elif duration > max_dur:
+                            duration = max_dur
+                            end_time = start_time + duration
+                        
+                        # Create single-word caption clip
+                        word_clip = self._create_single_word_clip(
+                            word_text, style, width, height, start_time, duration
+                        )
+                        
+                        if word_clip:
+                            caption_clips.append(word_clip)
+                else:
+                    # Fallback: split caption text into individual words with uniform timing
+                    words = caption_info['text'].split()
+                    if not words:
+                        continue
+                        
+                    total_duration = caption_info['duration']
+                    start_time = caption_info['start']
+                    duration_per_word = total_duration / len(words)
+                    
+                    for i, word in enumerate(words):
+                        word_start = start_time + (i * duration_per_word)
+                        
+                        # Create single-word caption clip
+                        word_clip = self._create_single_word_clip(
+                            word, style, width, height, word_start, duration_per_word
+                        )
+                        
+                        if word_clip:
+                            caption_clips.append(word_clip)
+                            
+            except Exception as e:
+                logger.warning(f"Failed to create single-word caption clips for '{caption_info['text'][:30]}...': {e}")
+                continue
+        
+        logger.info(f"✅ Created {len(caption_clips)} single-word caption clips")
+        return caption_clips
+    
+    def _create_single_word_clip(
+        self, 
+        word: str, 
+        style: CaptionStyle, 
+        width: int, 
+        height: int, 
+        start_time: float, 
+        duration: float
+    ) -> Any:
+        """
+        Create a single TextClip for one word with fixed center positioning.
+        
+        Args:
+            word: The word to display
+            style: Caption styling options
+            width: Video width
+            height: Video height
+            start_time: When to start displaying the word
+            duration: How long to display the word
+            
+        Returns:
+            TextClip object or None if creation failed
+        """
+        try:
+            # Fixed center position for single-word style (no dynamic positioning)
+            position = ('center', 'center')
+            
+            # Create text clip with enhanced styling for single words
+            txt_clip = self._create_styled_text_clip(
+                word, 
+                style, 
+                position, 
+                start_time, 
+                duration
+            )
+            
+            return txt_clip
+            
+        except Exception as e:
+            logger.warning(f"Failed to create single-word clip for '{word}': {e}")
+            return None
     
     
     def _has_descenders(self, text: str) -> bool:

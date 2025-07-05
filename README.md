@@ -38,16 +38,16 @@ uv sync
 #### Complete Video Generation (Primary Demo)
 ```bash
 # Complete pipeline: Wikipedia → Text → Speech → Video with captions
-uv run python -m tools.wikipedia_video --template downloads/videos/minecraft_parkour.mp4 --engine coqui --model jenny --music downloads/audio/Chat\ Roulette\ -\ Single\ Friend.mp3 --quality high --use-whisper --include-image "Donald Duck"
+uv run python -m tools.wikipedia_video --template downloads/videos/parkour1.mp4 --engine coqui --model jenny --music downloads/audio/Chat\ Roulette\ -\ Single\ Friend.mp3 --quality high --use-whisper --include-image --single-word-captions "Apple Inc."
 
 # Quick test with low quality
-uv run python -m demo_video "Cat" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality low --engine chattts
+uv run python -m tools.wikipedia_video --template downloads/videos/parkour1.mp4 --engine coqui --model jenny --quality low --single-word-captions "Cat"
 
-# Production quality video
-uv run python -m demo_video "Climate Change" --template downloads/videos/minecraft_parkour.mp4 --format vertical --quality high --engine chattts
+# Production quality video with music
+uv run python -m tools.wikipedia_video --template downloads/videos/parkour1.mp4 --engine coqui --model jenny --music downloads/audio/Chat\ Roulette\ -\ Single\ Friend.mp3 --quality high --use-whisper --include-image --single-word-captions "Climate Change"
 
 # Use rule-based content generation (faster, no LLM required)
-uv run python -m demo_video "Python programming" --template downloads/videos/minecraft_parkour.mp4 --use-rule-based
+uv run python -m tools.wikipedia_video --template downloads/videos/parkour1.mp4 --engine coqui --model jenny --use-rule-based --single-word-captions "Python programming"
 ```
 
 #### YouTube Upload

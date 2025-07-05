@@ -14,7 +14,7 @@ from dataclasses import dataclass
 @dataclass
 class LLMConfig:
     """Configuration for LLM generation."""
-    model: str = "llama3.2:3b"  # Default to smaller model for speed
+    model: str = "llama3.1:8b" 
     temperature: float = 0.8
     max_tokens: int = 300
     timeout: int = 30
@@ -187,8 +187,9 @@ Avoid:
 - Overly sarcastic or cynical tone
 - Self-referential humor about explaining things
 - Artificial enthusiasm or fake confusion
+- Repetition of phrases or using the same turns of phrase.
 
-Write ONLY the explanation text, no formatting. Be genuinely informative while finding real humor in the content.
+Write ONLY the explanation text, no formatting. Be genuinely informative while finding real humor in the content. Make sure you maintain continuity of your idesas throughout the video.
 
 Explanation:"""
 

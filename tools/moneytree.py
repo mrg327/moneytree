@@ -322,6 +322,7 @@ Smart Defaults:
     parser.add_argument('--hide-stats', action='store_true', help='Hide view count and stats')
     parser.add_argument('--no-notifications', action='store_true', help="Don't notify subscribers")
     parser.add_argument('--thumbnail', help='Path to custom thumbnail image (JPEG/PNG, max 2MB)')
+    parser.add_argument('--synthetic-media', action='store_true', help='Mark video as containing AI-generated content (YouTube disclosure)')
     
     # LLM configuration
     parser.add_argument('--llm-model', default='llama3.1:8b', help='LLM model to use (default: llama3.1:8b)')
@@ -678,7 +679,7 @@ Smart Defaults:
                     privacy_status=args.privacy,
                     default_language=args.language_code,
                     made_for_kids=made_for_kids,
-                    contains_synthetic_media=True,  # Always true for MoneyTree content
+                    contains_synthetic_media=args.synthetic_media,  # Optional disclosure for AI-generated content
                     publish_at=args.publish_at,
                     embeddable=not args.no_embedding,
                     public_stats_viewable=not args.hide_stats,

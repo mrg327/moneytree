@@ -160,38 +160,22 @@ class LLMMonologueGenerator:
         # Limit extract length to avoid token limits
         extract_snippet = extract[:500] + "..." if len(extract) > 500 else extract
         
-        prompt = f"""Create an entertaining educational explanation about this topic.
+        prompt = f"""Tell the story of {title} in {target_length} words using straightforward storytelling.
 
 Topic: {title}
 Description: {description}
-Key Information: {extract_snippet}
+Source material: {extract_snippet}
 
-Write a ~{target_length} word explanation that:
-- Presents factual information in an engaging way
-- Finds genuine humor in the actual facts and circumstances
-- Points out interesting contradictions, ironies, or unexpected details
-- Uses straightforward language without forced personality
-- Highlights absurd or remarkable aspects that naturally exist in the subject
-- Makes observations about human nature when genuinely relevant
-- Maintains an informative tone while being genuinely amusing
+Structure your narrative to:
+- Juxtapose contrasting elements without explicit commentary
+- Present scale and consequences in practical terms
+- Show how formal processes interact with unusual circumstances
+- Arrange events chronologically to reveal natural timing ironies
+- Treat all subject matter with equal seriousness regardless of apparent triviality
 
-Focus on:
-- What's inherently funny, strange, or remarkable about the actual facts
-- Unexpected juxtapositions (serious academic study of something silly)
-- Historical context that makes modern perspective amusing
-- Scale, timing, or circumstances that are naturally absurd
-- Real consequences of seemingly minor things
+Write as natural conversation. Let the facts and their relationships create any comedic effect through presentation rather than commentary.
 
-Avoid:
-- Forced "internet personality" catchphrases
-- Overly sarcastic or cynical tone
-- Self-referential humor about explaining things
-- Artificial enthusiasm or fake confusion
-- Repetition of phrases or using the same turns of phrase.
-
-Write ONLY the explanation text, no formatting. Be genuinely informative while finding real humor in the content. Make sure you maintain continuity of your idesas throughout the video.
-
-Explanation:"""
+Write ONLY the story text, no formatting:"""
 
         return prompt
     

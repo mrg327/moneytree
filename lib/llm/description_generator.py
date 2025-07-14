@@ -183,41 +183,19 @@ class LLMDescriptionGenerator:
             if clean_categories:
                 categories_text = f"Wikipedia Categories: {', '.join(clean_categories[:8])}\n"
         
-        prompt = f"""Create YouTube metadata for an educational video about this topic.
+        prompt = f"""Write a brief YouTube description for a short educational video about {title}.
 
-Topic: {title}
-Brief Description: {description}
-Key Content: {extract_snippet}
-{categories_text}Video Duration: {duration_text}
+Key points: {extract_snippet}
+{categories_text}Duration: {duration_text}
 
-Generate:
+Write 30-50 words that simply state what the video covers. No marketing language - just what someone will learn. Mention this is AI-generated educational content.
 
-1. DESCRIPTION (150-200 words):
-Write an engaging YouTube description that:
-- Summarizes the key fascinating points from this topic
-- Uses educational but accessible language
-- Includes natural keywords for discoverability
-- Mentions this is AI-generated educational content
-- Has a clear structure with the most interesting facts first
-- Ends with a call to action for educational content
+Then list 6-8 relevant tags.
 
-2. TAGS (8-12 tags):
-Create relevant tags including:
-- Main topic and variations
-- Educational keywords (education, learning, explained, facts)
-- Related concepts and subtopics
-- Subject area (science, history, technology, etc.)
-- Popular educational formats (educational, tutorial, facts)
+Format:
+[Brief description]
 
-Format your response EXACTLY like this:
-
-DESCRIPTION:
-[Your description here]
-
-TAGS:
-tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8
-
-Remember: Keep the description informative yet engaging, and ensure tags are specific and discoverable."""
+Tags: tag1, tag2, tag3, tag4, tag5, tag6"""
 
         return prompt
     
@@ -228,39 +206,28 @@ Remember: Keep the description informative yet engaging, and ensure tags are spe
         description = ""
         tags = []
         
-        # Split the response into sections
+        # Split response by lines
         lines = generated_text.strip().split('\n')
-        current_section = None
         description_lines = []
         
         for line in lines:
             line = line.strip()
             
-            if line.upper().startswith('DESCRIPTION:'):
-                current_section = 'description'
-                # Check if description is on the same line
-                desc_text = line[12:].strip()  # Remove "DESCRIPTION:"
-                if desc_text:
-                    description_lines.append(desc_text)
-                continue
-            elif line.upper().startswith('TAGS:'):
-                current_section = 'tags'
-                # Check if tags are on the same line
+            # Look for tags line (starts with "Tags:")
+            if line.upper().startswith('TAGS:'):
                 tags_text = line[5:].strip()  # Remove "TAGS:"
                 if tags_text:
                     tags = self._parse_tags_line(tags_text)
                 continue
             
-            # Process content based on current section
-            if current_section == 'description' and line:
+            # Everything else before tags line is description
+            if line and not line.upper().startswith('TAGS:'):
                 description_lines.append(line)
-            elif current_section == 'tags' and line:
-                tags.extend(self._parse_tags_line(line))
         
         # Join description lines
         description = ' '.join(description_lines).strip()
         
-        # If parsing failed, try to extract from the raw text
+        # If parsing failed, try fallback extraction
         if not description:
             description = self._extract_description_fallback(generated_text)
         
@@ -352,26 +319,23 @@ Remember: Keep the description informative yet engaging, and ensure tags are spe
     def _validate_description(self, description: str, title: str) -> str:
         """Validate and clean the generated description."""
         
-        if not description or len(description.strip()) < 50:
+        if not description or len(description.strip()) < 20:
             # Generate a basic fallback description
-            return (f"Learn about {title} in this educational video. "
-                   "This AI-generated content explores the key facts and interesting aspects "
-                   "of this topic in an engaging and accessible way. "
-                   "Perfect for students, educators, and anyone curious about learning something new!")
+            return f"Learn about {title}. AI-generated educational content exploring key facts about this topic."
         
         # Clean up the description
         description = description.strip()
         
         # Ensure it mentions AI-generated content if not already present
         if 'ai' not in description.lower() and 'generated' not in description.lower():
-            description += " This educational content is AI-generated to make learning accessible and engaging."
+            description += " AI-generated educational content."
         
-        # Ensure reasonable length (YouTube descriptions should be substantial but not too long)
+        # Keep descriptions short for YouTube Shorts (30-70 words)
         words = description.split()
-        if len(words) > 250:
-            description = ' '.join(words[:250]) + "..."
-        elif len(words) < 80:
-            description += f" Explore more educational content about {title} and related topics!"
+        if len(words) > 70:
+            description = ' '.join(words[:70])
+        elif len(words) < 25:
+            description += f" Educational content about {title}."
         
         return description
     

@@ -178,8 +178,8 @@ class GameEngine:
                 
             self.render()
             
-            # Check win condition
-            if self.check_win_condition():
+            # Check win condition (only if zone is enabled)
+            if self.game_config.enable_shrinking_zone and self.check_win_condition():
                 break
                 
             self.frame_count += 1

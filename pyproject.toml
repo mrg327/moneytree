@@ -24,6 +24,8 @@ dependencies = [
     "faster-whisper>=1.1.1",
     "selenium>=4.34.0",
     "webdriver-manager>=4.0.2",
+    "pygame>=2.5.0",
+    "pymunk>=6.6.0",
 ]
 
 [project.optional-dependencies]

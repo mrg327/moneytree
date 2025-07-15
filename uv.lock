@@ -4,7 +4,8 @@ requires-python = "==3.11.*"
 resolution-markers = [
     "sys_platform == 'darwin'",
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
+    "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')",
+    "sys_platform == 'emscripten'",
 ]
 
 [[package]]
@@ -1213,6 +1214,8 @@ dependencies = [
     { name = "ollama" },
     { name = "opencv-python" },
     { name = "pillow" },
+    { name = "pygame" },
+    { name = "pymunk" },
     { name = "pytesseract" },
     { name = "pytest" },
     { name = "requests" },
@@ -1242,6 +1245,8 @@ requires-dist = [
     { name = "ollama", specifier = ">=0.3.0" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
     { name = "pillow", specifier = ">=11.2.1" },
+    { name = "pygame", specifier = ">=2.5.0" },
+    { name = "pymunk", specifier = ">=6.6.0" },
     { name = "pytesseract", specifier = ">=0.3.13" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
@@ -1459,7 +1464,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.5.1.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/78/4535c9c7f859a64781e43c969a3a7e84c54634e319a996d43ef32ce46f83/nvidia_cudnn_cu12-9.5.1.17-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:30ac3869f6db17d170e0e556dd6cc5eee02647abc31ca856634d5a40f82c15b2", size = 570988386, upload-time = "2024-10-25T19:54:26.39Z" },
@@ -1470,7 +1475,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/16/73727675941ab8e6ffd86ca3a4b7b47065edcca7a997920b831f8147c99d/nvidia_cufft_cu12-11.3.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ccba62eb9cef5559abd5e0d54ceed2d9934030f51163df018532142a8ec533e5", size = 200221632, upload-time = "2024-11-20T17:41:32.357Z" },
@@ -1499,9 +1504,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/6e/c2cf12c9ff8b872e92b4a5740701e51ff17689c4d726fca91875b07f655d/nvidia_cusolver_cu12-11.7.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:e9e49843a7707e42022babb9bcfa33c29857a93b88020c4e4434656a655b698c", size = 158229790, upload-time = "2024-11-20T17:43:43.211Z" },
@@ -1513,7 +1518,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/06/1e/b8b7c2f4099a37b96af5c9bb158632ea9e5d9d27d7391d7eb8fc45236674/nvidia_cusparse_cu12-12.5.4.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7556d9eca156e18184b94947ade0fba5bb47d69cec46bf8660fd2c71a4b48b73", size = 216561367, upload-time = "2024-11-20T17:44:54.824Z" },
@@ -1904,12 +1909,51 @@ wheels = [
 ]
 
 [[package]]
+name = "pygame"
+version = "2.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/cc/08bba60f00541f62aaa252ce0cfbd60aebd04616c0b9574f755b583e45ae/pygame-2.6.1.tar.gz", hash = "sha256:56fb02ead529cee00d415c3e007f75e0780c655909aaa8e8bf616ee09c9feb1f", size = 14808125, upload-time = "2024-09-29T13:41:34.698Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/ca/8f367cb9fe734c4f6f6400e045593beea2635cd736158f9fabf58ee14e3c/pygame-2.6.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:20349195326a5e82a16e351ed93465a7845a7e2a9af55b7bc1b2110ea3e344e1", size = 13113753, upload-time = "2024-09-29T14:26:13.751Z" },
+    { url = "https://files.pythonhosted.org/packages/83/47/6edf2f890139616b3219be9cfcc8f0cb8f42eb15efd59597927e390538cb/pygame-2.6.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:f3935459109da4bb0b3901da9904f0a3e52028a3332a355d298b1673a334cf21", size = 12378146, upload-time = "2024-09-29T14:26:22.456Z" },
+    { url = "https://files.pythonhosted.org/packages/00/9e/0d8aa8cf93db2d2ee38ebaf1c7b61d0df36ded27eb726221719c150c673d/pygame-2.6.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:c31dbdb5d0217f32764797d21c2752e258e5fb7e895326538d82b5f75a0cd856", size = 13611760, upload-time = "2024-09-29T11:10:47.317Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/9e/d06adaa5cc65876bcd7a24f59f67e07f7e4194e6298130024ed3fb22c456/pygame-2.6.1-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:173badf82fa198e6888017bea40f511cb28e69ecdd5a72b214e81e4dcd66c3b1", size = 14298054, upload-time = "2024-09-29T11:39:53.891Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/a1/9ae2852ebd3a7cc7d9ae7ff7919ab983e4a5c1b7a14e840732f23b2b48f6/pygame-2.6.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce8cc108b92de9b149b344ad2e25eedbe773af0dc41dfb24d1f07f679b558c60", size = 13977107, upload-time = "2024-09-29T11:39:56.831Z" },
+    { url = "https://files.pythonhosted.org/packages/31/df/6788fd2e9a864d0496a77670e44a7c012184b7a5382866ab0e60c55c0f28/pygame-2.6.1-cp311-cp311-win32.whl", hash = "sha256:811e7b925146d8149d79193652cbb83e0eca0aae66476b1cb310f0f4226b8b5c", size = 10250863, upload-time = "2024-09-29T11:44:48.199Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/55/ca3eb851aeef4f6f2e98a360c201f0d00bd1ba2eb98e2c7850d80aabc526/pygame-2.6.1-cp311-cp311-win_amd64.whl", hash = "sha256:91476902426facd4bb0dad4dc3b2573bc82c95c71b135e0daaea072ed528d299", size = 10622016, upload-time = "2024-09-29T12:17:01.545Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.19.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7c/2d/c3338d48ea6cc0feb8446d8e6937e1408088a72a39937982cc6111d17f84/pygments-2.19.1.tar.gz", hash = "sha256:61c16d2a8576dc0649d9f39e089b5f02bcd27fba10d8fb4dcc28173f7a45151f", size = 4968581, upload-time = "2025-01-06T17:26:30.443Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0b/9fcc47d19c48b59121088dd6da2488a49d5f72dacf8262e2790a1d2c7d15/pygments-2.19.1-py3-none-any.whl", hash = "sha256:9ea1544ad55cecf4b8242fab6dd35a93bbce657034b0611ee383099054ab6d8c", size = 1225293, upload-time = "2025-01-06T17:26:25.553Z" },
+]
+
+[[package]]
+name = "pymunk"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/25/ee7ff873cec8aee64751b284c7cba2bd3e7364f67b9bd7d41b16a8ab358f/pymunk-7.1.0.tar.gz", hash = "sha256:f3045897261325bb3e89284402dd43b908d0a5871dc2010597e36b4309f0229b", size = 3355569, upload-time = "2025-06-30T19:39:08.81Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/25/c444107931609190880d8b675c2991cca44a0f9ed87096eab4db2b163a51/pymunk-7.1.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:65f25bbc2b406952ffcef9b93ed365839c9204501bfc2cfa51e69ed7f4361d18", size = 366944, upload-time = "2025-06-29T20:05:45.847Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/7d/a8d44489239095920e106bf086232a7196e91a9f024d26e93c9cf689fda3/pymunk-7.1.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:05cb205a402028c8f6a92ee21b224c02b1f48cf77ace2d3388399146721490b3", size = 350065, upload-time = "2025-06-29T20:05:47.551Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/a5/94fbba10ed7fb90ca59c6bdb0fb24e7094f08dced697ddd2a0de213e41f8/pymunk-7.1.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b82bb3c7ebb7363f176db4262d0763194090ea47247a40c69b3f90a287ca7c51", size = 990198, upload-time = "2025-06-29T20:05:50.349Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/65/8f101497ae1af6a686629c51778b48694af00ad526542fd77e7d5c90f3b8/pymunk-7.1.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a2fd7d5dc1b04ae689e6226e802cceaac08678c858584172cfbc6367235e59a6", size = 1010957, upload-time = "2025-06-29T20:05:52.673Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/5f/950e45853044bb99005104f80bcbad766775f7fcf285425a267a75576685/pymunk-7.1.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:f1158b0237881f5790e172f622f50339c087288565af7704623920c566528ac6", size = 987070, upload-time = "2025-06-29T20:05:54.818Z" },
+    { url = "https://files.pythonhosted.org/packages/72/56/9b3896cf7f3d30ed8dea0161fe9dfecb9347a0d1b5c820e552b55e9eebf8/pymunk-7.1.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:633a59c5f7d0854d38989a4e2f8868e15502954bc47948df6e466ff9118b1e73", size = 1010737, upload-time = "2025-06-29T20:05:57.062Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/65/f2edc7a203034b7b0c30630477843e3293f0668f5e59e2ae1d29e230d5cd/pymunk-7.1.0-cp311-cp311-win32.whl", hash = "sha256:4611da94452baa77966339fd99addadea05e24e2ef1af76d98bdb67004a1455d", size = 317981, upload-time = "2025-06-29T20:05:58.617Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/ba/50418a3e193f889bc2ca7425315fdd58b2c03350ec7464f319cedb1a0c35/pymunk-7.1.0-cp311-cp311-win_amd64.whl", hash = "sha256:4d52d645e2cb2e7390b1bb258060b13d0d42c2f63aee1e2b37bd650aca82d9f4", size = 367908, upload-time = "2025-06-29T20:06:00.265Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/8c/4eb77d1dd616342a94ad084a57a158e9360b8e6e69571459a5041493155d/pymunk-7.1.0-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:49c54ce32efb925fe7ce2cc0f1b147b0caa6bbb6ce28ba56620c83b62eefd6fd", size = 293015, upload-time = "2025-06-29T20:07:01.876Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/ab/2431ff3164ca781b1f6fe437f7dd39b6d4f8c1d381a35406c2ccc53ca31f/pymunk-7.1.0-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:5cc79305cd81e1a56239c41df88b9f481f3a195e898dc68580307e7bdbc5ac61", size = 284890, upload-time = "2025-06-29T20:07:03.382Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/8a/ba3cc680eae865a8172a8ab63651b0b0fabe993b14f8ea7f9c7123ec5b9e/pymunk-7.1.0-pp311-pypy311_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3ac088099d24e656a6e49a649c9d23972050d03002004f9e0ca48cf1f5987add", size = 318968, upload-time = "2025-06-29T20:07:04.957Z" },
+    { url = "https://files.pythonhosted.org/packages/68/a7/2246e805f4696f834a5cff5002273808004b79a751d251f501bc758afc40/pymunk-7.1.0-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:655353a2d2dfbb22efefb260ba4bee9658765a6b9fe90313d315fb6f7a13fe82", size = 323928, upload-time = "2025-06-29T20:07:06.586Z" },
+    { url = "https://files.pythonhosted.org/packages/92/2d/b915a610a3bf664bbd3ffd5e93eea40605dc29b051c72e27a8bedeafaa38/pymunk-7.1.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:9198801def80d77b55da952c686822281ad0155f33d75566338f5b728ffa0baa", size = 309467, upload-time = "2025-06-29T20:07:08.042Z" },
 ]
 
 [[package]]
@@ -2666,7 +2710,7 @@ name = "triton"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "setuptools", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/21/2f/3e56ea7b58f80ff68899b1dbe810ff257c9d177d288c6b0f55bf2fe4eb50/triton-3.3.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b31e3aa26f8cb3cc5bf4e187bf737cbacf17311e1112b781d4a059353dfd731b", size = 155689937, upload-time = "2025-05-29T23:39:44.182Z" },

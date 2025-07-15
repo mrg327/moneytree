@@ -289,6 +289,7 @@ Smart Defaults:
                        default='natural', help='ChatTTS voice style (default: natural)')
     parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny', 'xtts_v2'],
                        default='jenny', help='Coqui TTS model (default: tacotron2)')
+    parser.add_argument('--speaker', help='Speaker ID for VITS model (e.g., p363, p225, p234, p247, p280). Only used with --model vits')
     parser.add_argument('--music', help='Path to background music file (default: first file in downloads/audio/)')
     parser.add_argument('--quality', choices=['low', 'medium', 'high'], default='high',
                        help='Video output quality (default: high)')
@@ -334,6 +335,11 @@ Smart Defaults:
     # Validate mutually exclusive options
     if args.made_for_kids and args.not_made_for_kids:
         logger.error("❌ Cannot specify both --made-for-kids and --not-made-for-kids")
+        return 1
+    
+    # Validate speaker argument
+    if args.speaker and args.model != 'vits':
+        logger.error("❌ --speaker can only be used with --model vits")
         return 1
     
     # Validate requirements and set smart defaults
@@ -502,16 +508,24 @@ Smart Defaults:
                         )
                 else:
                     # Traditional models
-                    model_map = {
-                        'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
-                        'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
-                        'vits': "tts_models/en/vctk/vits",
-                        'jenny': "tts_models/en/jenny/jenny"
-                    }
-                    
-                    tts_config = CoquiTTSConfig(
-                        model_name=model_map[args.model]
-                    )
+                    if args.model == 'vits':
+                        # Use VITS with optional speaker selection
+                        tts_config = CoquiTTSConfig.for_vits(speaker_idx=args.speaker)
+                        if args.speaker:
+                            logger.info(f"🎤 Using VITS model with speaker: {args.speaker}")
+                        else:
+                            logger.info("🎤 Using VITS model with default speaker")
+                    else:
+                        # Other traditional models
+                        model_map = {
+                            'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
+                            'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
+                            'jenny': "tts_models/en/jenny/jenny"
+                        }
+                        
+                        tts_config = CoquiTTSConfig(
+                            model_name=model_map[args.model]
+                        )
                 
                 speech_gen = CoquiSpeechGenerator(tts_config)
                 
@@ -614,7 +628,7 @@ Smart Defaults:
                     if optimized_music and Path(optimized_music).exists():
                         music_result = video_clip.add_background_music(
                             optimized_music,
-                            volume=0.25,
+                            volume=0.15,
                             fade_in=3.0,
                             fade_out=3.0
                         )

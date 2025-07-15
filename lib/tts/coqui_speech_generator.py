@@ -38,6 +38,9 @@ class CoquiTTSConfig:
     quality: str = "medium"  # low, medium, high
     device: str = None  # auto-detect, or specify "cpu" or "cuda"
     
+    # Multi-speaker model parameters (VITS, etc.)
+    speaker_idx: Optional[str] = None  # Speaker ID for multi-speaker models (e.g., "p363" for VITS)
+    
     # XTTS-v2 specific parameters
     use_xtts: bool = False  # Enable XTTS-v2 voice cloning
     speaker_wav: Optional[str] = None  # Reference audio for voice cloning (6+ seconds)
@@ -74,6 +77,55 @@ class CoquiTTSConfig:
             device="cuda" if gpu else "cpu",
             **kwargs
         )
+    
+    @classmethod
+    def for_vits(cls, speaker_idx: Optional[str] = None, **kwargs) -> 'CoquiTTSConfig':
+        """
+        Create configuration optimized for VITS multi-speaker model.
+        
+        Args:
+            speaker_idx: Speaker ID for VITS model (e.g., "p363", "p225", etc.)
+                        If None, uses default speaker
+            **kwargs: Additional configuration parameters
+            
+        Returns:
+            CoquiTTSConfig configured for VITS with speaker selection
+        """
+        return cls(
+            model_name="tts_models/en/vctk/vits",
+            sample_rate=22050,
+            speaker_idx=speaker_idx,
+            quality="high",
+            **kwargs
+        )
+    
+    @staticmethod
+    def get_vits_speakers() -> List[str]:
+        """
+        Get list of available VITS speakers.
+        
+        Returns:
+            List of speaker IDs for VITS model (p225-p376)
+        """
+        # VCTK dataset speakers - 109 speakers total
+        speakers = []
+        # p225-p376 with some gaps in the numbering
+        for i in range(225, 377):
+            speakers.append(f"p{i}")
+        
+        # Return common/recommended speakers first, then all speakers
+        recommended = ["p225", "p226", "p230", "p231", "p234", "p236", "p245", "p247", 
+                      "p248", "p250", "p254", "p256", "p258", "p259", "p260", "p270", 
+                      "p273", "p274", "p276", "p277", "p278", "p279", "p280", "p281", 
+                      "p282", "p283", "p284", "p285", "p286", "p287", "p292", "p293", 
+                      "p294", "p295", "p297", "p298", "p299", "p300", "p301", "p302", 
+                      "p304", "p305", "p306", "p307", "p308", "p310", "p311", "p312", 
+                      "p313", "p314", "p316", "p317", "p318", "p323", "p326", "p329", 
+                      "p330", "p333", "p334", "p335", "p336", "p339", "p340", "p341", 
+                      "p343", "p345", "p347", "p351", "p360", "p361", "p362", "p363", 
+                      "p364", "p374", "p376"]
+        
+        return recommended
     
     @classmethod
     def for_popular_model(cls, model_preset: str = "best_quality", **kwargs) -> 'CoquiTTSConfig':
@@ -265,10 +317,16 @@ class CoquiSpeechGenerator:
                 self._generate_xtts_speech(full_text, str(output_path))
             else:
                 # Use traditional TTS models
-                self.tts.tts_to_file(
-                    text=full_text,
-                    file_path=str(output_path)
-                )
+                kwargs = {
+                    "text": full_text,
+                    "file_path": str(output_path)
+                }
+                
+                # Add speaker for multi-speaker models (like VITS)
+                if self.config.speaker_idx:
+                    kwargs["speaker"] = self.config.speaker_idx
+                
+                self.tts.tts_to_file(**kwargs)
             
             # Check if file was created and perform quality validation
             if os.path.exists(output_path):

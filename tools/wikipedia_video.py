@@ -69,6 +69,7 @@ def main():
                        default='natural', help='ChatTTS voice style')
     parser.add_argument('--model', choices=['tacotron2', 'fast_pitch', 'vits', 'jenny', 'xtts_v2'],
                        default='tacotron2', help='Coqui TTS model')
+    parser.add_argument('--speaker', help='Speaker ID for VITS model (e.g., p363, p225, p234, p247, p280). Only used with --model vits')
     parser.add_argument('--music', help='Path to background music file')
     parser.add_argument('--use-rule-based', action='store_true',
                        help='Use rule-based generator instead of LLM')
@@ -80,7 +81,7 @@ def main():
     parser.add_argument('--disable-optimization', action='store_true',
                        help='Disable pipeline optimizations (for debugging)')
     parser.add_argument('--buffer-factor', type=float, default=1.15,
-                       help='Buffer factor for early media trimming (default: 1.15 = 15% buffer)')
+                       help='Buffer factor for early media trimming (default: 1.15 = 15%% buffer)')
     parser.add_argument('--use-whisper', action='store_true',
                        help='Use Whisper ASR for audio-synchronized captions (fallback to speech analysis if fails)')
     parser.add_argument('--clone-voice', help='Path to reference audio for voice cloning (6+ seconds)')
@@ -113,6 +114,11 @@ def main():
     template_path = Path(args.template)
     if not template_path.exists():
         logger.error(f"Template video not found: {template_path}")
+        return
+    
+    # Validate speaker argument
+    if args.speaker and args.model != 'vits':
+        logger.error("❌ --speaker can only be used with --model vits")
         return
     
     logger.info("MoneyTree: Optimized Video Generation Pipeline")
@@ -269,17 +275,25 @@ def main():
                     )
             else:
                 # Traditional models
-                model_map = {
-                    'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
-                    'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
-                    'vits': "tts_models/en/vctk/vits",
-                    'jenny': "tts_models/en/jenny/jenny"
-                }
-                
-                tts_config = CoquiTTSConfig(
-                    model_name=model_map[args.model]
-                    # device auto-detected (GPU if available, CPU otherwise)
-                )
+                if args.model == 'vits':
+                    # Use VITS with optional speaker selection
+                    tts_config = CoquiTTSConfig.for_vits(speaker_idx=args.speaker)
+                    if args.speaker:
+                        logger.info(f"🎤 Using VITS model with speaker: {args.speaker}")
+                    else:
+                        logger.info("🎤 Using VITS model with default speaker")
+                else:
+                    # Other traditional models
+                    model_map = {
+                        'tacotron2': "tts_models/en/ljspeech/tacotron2-DDC",
+                        'fast_pitch': "tts_models/en/ljspeech/fast_pitch",
+                        'jenny': "tts_models/en/jenny/jenny"
+                    }
+                    
+                    tts_config = CoquiTTSConfig(
+                        model_name=model_map[args.model]
+                        # device auto-detected (GPU if available, CPU otherwise)
+                    )
             
             speech_gen = CoquiSpeechGenerator(tts_config)
             
@@ -379,7 +393,7 @@ def main():
                 if optimized_music and Path(optimized_music).exists():
                     music_result = video_clip.add_background_music(
                         optimized_music,
-                        volume=0.25,  # Lower volume to not overpower narration
+                        volume=0.15,  # Lower volume to not overpower narration
                         fade_in=3.0,
                         fade_out=3.0
                     )

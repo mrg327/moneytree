@@ -349,6 +349,83 @@ class FFmpegUtils:
         except Exception as e:
             logger.error(f"Audio trim error: {e}")
             return False
+    
+    def create_video_from_frames(self, frame_dir: str, output_path: str, 
+                               fps: int = 30, frame_pattern: str = "frame_%06d.png") -> Dict[str, Any]:
+        """
+        Create video from sequence of frame images.
+        
+        Args:
+            frame_dir: Directory containing frame images
+            output_path: Output video file path
+            fps: Frame rate for output video
+            frame_pattern: Pattern for frame filenames
+            
+        Returns:
+            Dictionary with success status and details
+        """
+        try:
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Build ffmpeg command
+            cmd = [
+                self.ffmpeg_path,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",  # Overwrite output file
+                "-framerate", str(fps),
+                "-i", os.path.join(frame_dir, frame_pattern),
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-crf", "18",  # High quality
+                output_path
+            ]
+            
+            logger.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+            
+            # Execute command
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
+            if result.returncode != 0:
+                logger.error(f"FFmpeg frame-to-video conversion failed: {result.stderr}")
+                return {
+                    'success': False,
+                    'error': f"FFmpeg failed: {result.stderr}",
+                    'command': ' '.join(cmd)
+                }
+            
+            # Verify output file exists
+            if not os.path.exists(output_path):
+                return {
+                    'success': False,
+                    'error': "Output file was not created"
+                }
+            
+            # Get output file info
+            file_size = os.path.getsize(output_path)
+            
+            logger.info(f"Video created from frames: {output_path} ({file_size:,} bytes)")
+            
+            return {
+                'success': True,
+                'output_path': output_path,
+                'file_size': file_size,
+                'fps': fps
+            }
+            
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg frame-to-video conversion timed out")
+            return {
+                'success': False,
+                'error': "FFmpeg conversion timed out"
+            }
+        except Exception as e:
+            logger.error(f"Frame-to-video conversion error: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 
 # Module-level convenience functions

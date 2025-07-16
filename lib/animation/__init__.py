@@ -1,1 +1,1 @@
-"""Animation library for MoneyTree battle royale simulations."""
+"""Animation library for MoneyTree RPS simulations."""

@@ -1,4 +1,4 @@
-"""Entity management for rock-paper-scissors battle royale."""
+"""Entity management for rock-paper-scissors simulation."""
 
 import random
 import math
@@ -36,7 +36,7 @@ class EntityConfig:
 
 
 class Entity:
-    """Individual entity in the battle royale."""
+    """Individual entity in the simulation."""
     
     def __init__(self, entity_id: int, entity_type: EntityType, x: float, y: float, 
                  config: EntityConfig, space: pymunk.Space):
@@ -153,7 +153,7 @@ class Entity:
 
 
 class EntityManager:
-    """Manages all entities in the battle royale."""
+    """Manages all entities in the simulation."""
     
     def __init__(self, config: EntityConfig, space: pymunk.Space, 
                  world_width: int, world_height: int):

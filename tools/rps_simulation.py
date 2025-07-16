@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Rock-Paper-Scissors Battle Royale Animation Generator.
+Rock-Paper-Scissors Simulation Animation Generator.
 
-Generate engaging battle royale animations using rock-paper-scissors mechanics.
+Generate engaging RPS interaction animations using rock-paper-scissors mechanics.
 Creates MP4 videos with customizable parameters, entity counts, and visual effects.
 
 Usage:
-    uv run python -m tools.rps_battle_royale --output my_battle.mp4
-    uv run python -m tools.rps_battle_royale --entities 200 --duration 90
-    uv run python -m tools.rps_battle_royale --resolution 1920x1080 --fps 60
-    uv run python -m tools.rps_battle_royale --music background.mp3 --preview
+    uv run python -m tools.rps_simulation --output my_simulation.mp4
+    uv run python -m tools.rps_simulation --entities 200 --duration 90
+    uv run python -m tools.rps_simulation --resolution 1920x1080 --fps 60
+    uv run python -m tools.rps_simulation --music background.mp3 --preview
 """
 
 import sys
@@ -80,32 +80,32 @@ def create_progress_callback(total_duration: float):
 
 
 def main():
-    """Run the rock-paper-scissors battle royale generator."""
+    """Run the rock-paper-scissors simulation generator."""
     parser = argparse.ArgumentParser(
-        description='MoneyTree: Rock-Paper-Scissors Battle Royale Animation Generator',
+        description='MoneyTree: Rock-Paper-Scissors Simulation Animation Generator',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic battle royale with default settings
-  uv run python -m tools.rps_battle_royale
+  # Basic RPS simulation with default settings
+  uv run python -m tools.rps_simulation
   
   # Custom entity count and duration
-  uv run python -m tools.rps_battle_royale --entities 300 --duration 120
+  uv run python -m tools.rps_simulation --entities 300 --duration 120
   
   # High resolution with background music
-  uv run python -m tools.rps_battle_royale --resolution 2560x1440 --music background.mp3
+  uv run python -m tools.rps_simulation --resolution 2560x1440 --music background.mp3
   
   # Quick preview GIF
-  uv run python -m tools.rps_battle_royale --preview --duration 30
+  uv run python -m tools.rps_simulation --preview --duration 30
   
-  # Disable zone shrinking for pure RPS simulation
-  uv run python -m tools.rps_battle_royale --no-zone --duration 180
+  # Long duration simulation
+  uv run python -m tools.rps_simulation --duration 180
         """
     )
     
     # Output options
-    parser.add_argument('--output', '-o', default='video_output/rps_battle_royale.mp4',
-                       help='Output video file path (default: video_output/rps_battle_royale.mp4)')
+    parser.add_argument('--output', '-o', default='video_output/rps_simulation.mp4',
+                       help='Output video file path (default: video_output/rps_simulation.mp4)')
     parser.add_argument('--preview', action='store_true',
                        help='Create a preview GIF instead of full video')
     
@@ -119,13 +119,6 @@ Examples:
     parser.add_argument('--fps', type=int, default=60,
                        help='Video framerate (default: 60)')
     
-    # Battle royale settings
-    parser.add_argument('--no-zone', action='store_true',
-                       help='Disable shrinking zone (pure RPS simulation)')
-    parser.add_argument('--zone-start', type=float, default=10.0,
-                       help='Time before zone starts shrinking (default: 10.0)')
-    parser.add_argument('--zone-duration', type=float, default=40.0,
-                       help='Duration of zone shrinking (default: 40.0)')
     
     # Entity settings
     parser.add_argument('--entity-size', type=float, default=20.0,
@@ -188,10 +181,7 @@ Examples:
         height=height,
         fps=args.fps,
         duration=args.duration,
-        background_color=background_color,
-        enable_shrinking_zone=not args.no_zone,
-        zone_start_time=args.zone_start,
-        zone_shrink_duration=args.zone_duration
+        background_color=background_color
     )
     
     entity_config = EntityConfig(
@@ -216,7 +206,7 @@ Examples:
     
     # Validate inputs
     if args.entities < 3:
-        print("Error: Need at least 3 entities for a battle royale")
+        print("Error: Need at least 3 entities for the simulation")
         sys.exit(1)
     
     if args.duration <= 0:
@@ -230,7 +220,7 @@ Examples:
     renderer = VideoRenderer(game_config, entity_config, video_config)
     
     if not args.quiet:
-        print("MoneyTree Rock-Paper-Scissors Battle Royale Generator")
+        print("MoneyTree Rock-Paper-Scissors Simulation Generator")
         print("=" * 60)
         
         # Display configuration
@@ -239,7 +229,6 @@ Examples:
         print(f"Duration: {args.duration}s")
         print(f"FPS: {args.fps}")
         print(f"Entities: {args.entities}")
-        print(f"Zone enabled: {not args.no_zone}")
         print(f"Estimated file size: {video_info['estimated_file_size_mb']} MB")
         print(f"Total frames: {video_info['total_frames']}")
         print(f"Output: {args.output}")

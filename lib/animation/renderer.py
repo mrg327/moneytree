@@ -1,4 +1,4 @@
-"""Video renderer for battle royale animations."""
+"""Video renderer for RPS animations."""
 
 import os
 import tempfile
@@ -16,7 +16,7 @@ from .entity_manager import EntityConfig
 @dataclass
 class VideoConfig:
     """Configuration for video rendering."""
-    output_path: str = "video_output/rps_battle_royale.mp4"
+    output_path: str = "video_output/rps_simulation.mp4"
     fps: int = 60
     codec: str = "mp4v"  # Or "H264" if available
     bitrate: int = 8000000  # 8 Mbps
@@ -33,7 +33,7 @@ class VideoConfig:
 
 
 class VideoRenderer:
-    """Renders battle royale game to video file."""
+    """Renders RPS simulation to video file."""
     
     def __init__(self, game_config: GameConfig = None, entity_config: EntityConfig = None,
                  video_config: VideoConfig = None):

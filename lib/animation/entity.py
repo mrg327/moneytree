@@ -8,13 +8,21 @@ import math
 import random
 from enum import Enum
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
+from pathlib import Path
+
+from lib.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import pygame
+    from PIL import Image
     HAS_PYGAME = True
+    HAS_PIL = True
 except ImportError:
     HAS_PYGAME = False
+    HAS_PIL = False
 
 
 class EntityType(Enum):
@@ -34,9 +42,11 @@ class RPSEntity:
         position: Current (x, y) position on screen
         velocity: Current (vx, vy) velocity vector
         radius: Entity radius for collision detection
-        color: RGBA color tuple for rendering
+        color: RGBA color tuple for rendering (used for fallback)
         mass: Entity mass for collision physics
         max_speed: Maximum speed limit
+        emoji_image_path: Path to emoji image file for rendering
+        use_emoji: Whether to use emoji rendering instead of colored circles
     """
     
     entity_type: EntityType
@@ -46,11 +56,18 @@ class RPSEntity:
     color: Tuple[int, int, int, int] = (255, 255, 255, 255)
     mass: float = 1.0
     max_speed: float = 100.0
+    emoji_image_path: Optional[str] = None
+    use_emoji: bool = False
+    _emoji_surface: Optional[pygame.Surface] = None
     
     def __post_init__(self):
-        """Initialize entity with default colors based on type."""
+        """Initialize entity with default colors and emoji based on type."""
         if self.color == (255, 255, 255, 255):  # Default white, set type-specific color
             self.color = self.get_default_color()
+        
+        # Load emoji surface if emoji rendering is enabled
+        if self.use_emoji and self.emoji_image_path:
+            self._load_emoji_surface()
     
     def get_default_color(self) -> Tuple[int, int, int, int]:
         """Get default color based on entity type."""
@@ -60,6 +77,62 @@ class RPSEntity:
             EntityType.SCISSORS: (255, 0, 0, 255)      # Red, fully opaque
         }
         return color_map.get(self.entity_type, (255, 255, 255, 255))
+    
+    def _load_emoji_surface(self) -> None:
+        """Load emoji image as pygame surface."""
+        if not (HAS_PYGAME and HAS_PIL and self.emoji_image_path):
+            logger.debug(f"Prerequisites not met: HAS_PYGAME={HAS_PYGAME}, HAS_PIL={HAS_PIL}, emoji_image_path={self.emoji_image_path}")
+            return
+        
+        # Check if pygame is initialized (remove overly strict display check)
+        if not pygame.get_init():
+            logger.debug("Pygame not initialized, skipping emoji load")
+            return  # Will be loaded later when pygame is ready
+        
+        try:
+            logger.debug(f"Loading emoji from {self.emoji_image_path}")
+            
+            # Load PNG image with PIL
+            pil_image = Image.open(self.emoji_image_path)
+            logger.debug(f"PIL image loaded: {pil_image.size}, mode: {pil_image.mode}")
+            
+            # Convert to RGBA if not already
+            if pil_image.mode != 'RGBA':
+                pil_image = pil_image.convert('RGBA')
+                logger.debug("Converted to RGBA")
+            
+            # Scale to fit entity radius (emoji should be slightly smaller than radius)
+            emoji_size = int(self.radius * 1.8)  # Make emoji slightly larger than circle
+            pil_image = pil_image.resize((emoji_size, emoji_size), Image.Resampling.LANCZOS)
+            logger.debug(f"Resized to {emoji_size}x{emoji_size}")
+            
+            # Convert PIL image to pygame surface
+            mode = pil_image.mode
+            size = pil_image.size
+            data = pil_image.tobytes()
+            logger.debug(f"Got image data: {len(data)} bytes")
+            
+            # Create pygame surface with alpha
+            self._emoji_surface = pygame.image.fromstring(data, size, mode)
+            self._emoji_surface = self._emoji_surface.convert_alpha()
+            logger.debug(f"Created pygame surface: {self._emoji_surface.get_size()}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to load emoji image {self.emoji_image_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            self._emoji_surface = None
+    
+    def set_emoji(self, emoji_image_path: str) -> None:
+        """
+        Set emoji image for this entity.
+        
+        Args:
+            emoji_image_path: Path to emoji PNG image
+        """
+        self.emoji_image_path = emoji_image_path
+        self.use_emoji = True
+        self._load_emoji_surface()
     
     def update(self, dt: float, screen_width: int, screen_height: int) -> None:
         """
@@ -143,6 +216,29 @@ class RPSEntity:
         """Convert this entity to a different type."""
         self.entity_type = new_type
         self.color = self.get_default_color()
+        
+        # Update emoji if emoji rendering is enabled
+        if self.use_emoji:
+            self._update_emoji_for_type(new_type)
+    
+    def _update_emoji_for_type(self, entity_type: EntityType) -> None:
+        """Update emoji image when entity type changes."""
+        # Clear the current surface
+        self._emoji_surface = None
+        
+        # Update emoji path based on new type
+        # This assumes the emoji paths follow the pattern from EmojiRenderer
+        if hasattr(self, '_emoji_path_mapping'):
+            new_path = self._emoji_path_mapping.get(entity_type.value)
+            if new_path:
+                self.emoji_image_path = new_path
+                logger.debug(f"Updated emoji path for {entity_type.value}: {new_path}")
+        else:
+            logger.debug(f"No emoji path mapping available for type conversion to {entity_type.value}")
+    
+    def set_emoji_path_mapping(self, emoji_paths: dict) -> None:
+        """Set the mapping of entity types to emoji paths."""
+        self._emoji_path_mapping = emoji_paths
     
     def apply_collision_physics(self, other: 'RPSEntity') -> None:
         """
@@ -228,6 +324,40 @@ class RPSEntity:
             return
         
         x, y = self.position
+        
+        # Use emoji rendering if enabled
+        if self.use_emoji:
+            self._render_emoji(screen, x, y)
+        else:
+            # Fallback to colored circle rendering
+            self._render_circle(screen, x, y)
+    
+    def _render_emoji(self, screen, x: float, y: float) -> None:
+        """Render emoji image centered at position."""
+        # Try to load emoji if not yet loaded
+        if not self._emoji_surface and self.emoji_image_path:
+            logger.debug(f"Loading emoji surface for {self.entity_type}: {self.emoji_image_path}")
+            self._load_emoji_surface()
+        
+        if not self._emoji_surface:
+            # Fallback to circle rendering if emoji loading failed
+            logger.debug(f"Emoji surface not available for {self.entity_type}, using circle fallback")
+            self._render_circle(screen, x, y)
+            return
+        
+        # Get emoji surface dimensions
+        emoji_width = self._emoji_surface.get_width()
+        emoji_height = self._emoji_surface.get_height()
+        
+        # Calculate position to center the emoji
+        emoji_x = int(x - emoji_width // 2)
+        emoji_y = int(y - emoji_height // 2)
+        
+        # Blit emoji with transparency
+        screen.blit(self._emoji_surface, (emoji_x, emoji_y))
+    
+    def _render_circle(self, screen, x: float, y: float) -> None:
+        """Render colored circle (fallback rendering)."""
         pygame.draw.circle(screen, self.color, (int(x), int(y)), int(self.radius))
         
         # Add border for better visibility

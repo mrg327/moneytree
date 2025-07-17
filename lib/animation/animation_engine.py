@@ -39,7 +39,7 @@ class AnimationConfig:
     screen_width: int = 800
     screen_height: int = 600
     fps: int = 60
-    background_color: Tuple[int, int, int, int] = (0, 0, 0, 255)  # Black background, fully opaque
+    background_color: Tuple[int, int, int, int] = (245, 245, 220, 255)  # Cream background, fully opaque
     
     # Export settings
     export_frames: bool = False

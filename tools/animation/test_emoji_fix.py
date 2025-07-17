@@ -62,8 +62,8 @@ def main():
                 pygame.quit()
                 return True
         
-        # Clear screen
-        screen.fill((50, 50, 50))
+        # Clear screen with cream background
+        screen.fill((245, 245, 220))
         
         # Render entities
         for entity in entities:

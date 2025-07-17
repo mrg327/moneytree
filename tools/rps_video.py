@@ -3,7 +3,7 @@
 RPS Battle Royale Video Generator.
 
 Creates engaging Rock Paper Scissors battle simulation videos with statistics,
-background music, and optional audio commentary.
+background music, optional audio commentary, and emoji rendering support.
 """
 
 from lib.utils.logging_config import setup_logging, get_logger, LoggedOperation
@@ -64,7 +64,8 @@ def generate_rps_video(
     simulation_config: SimulationConfig,
     animation_config: AnimationConfig,
     music_path: Optional[str] = None,
-    add_commentary: bool = False
+    add_commentary: bool = False,
+    use_emojis: bool = False
 ) -> Dict[str, Any]:
     """
     Generate complete RPS battle video.
@@ -83,11 +84,55 @@ def generate_rps_video(
     logger.info(f"Output: {output_path}")
     logger.info(f"Entities: {simulation_config.total_entities}")
     logger.info(f"Resolution: {animation_config.screen_width}x{animation_config.screen_height}")
+    logger.info(f"Emoji rendering: {'enabled' if use_emojis else 'disabled'}")
     
     try:
-        # Step 1: Run RPS simulation and capture frames
+        # Step 1: Setup emoji rendering if requested
+        emoji_paths = None
+        if use_emojis:
+            with LoggedOperation(logger, "emoji setup"):
+                try:
+                    from tools.animation.emoji_renderer import EmojiRenderer
+                    
+                    renderer = EmojiRenderer(default_size=40)
+                    emoji_paths = renderer.render_rps_emojis(size=40)
+                    
+                    if emoji_paths:
+                        logger.info(f"Generated emojis: {list(emoji_paths.keys())}")
+                    else:
+                        logger.warning("Failed to generate emojis, falling back to circles")
+                        use_emojis = False
+                        
+                except ImportError as e:
+                    logger.warning(f"Emoji renderer not available: {e}")
+                    use_emojis = False
+                except Exception as e:
+                    logger.warning(f"Emoji setup failed: {e}")
+                    use_emojis = False
+        
+        # Step 2: Run RPS simulation and capture frames
         with LoggedOperation(logger, "RPS simulation and frame capture"):
             engine = AnimationEngine(animation_config, simulation_config)
+            
+            # Enable emoji rendering for entities if requested
+            if use_emojis and emoji_paths:
+                # Hook into the simulator to enable emoji rendering
+                original_initialize = engine.simulator.initialize_entities
+                
+                def initialize_entities_with_emojis():
+                    original_initialize()
+                    
+                    # Enable emoji rendering for all entities
+                    for entity in engine.simulator.entities:
+                        emoji_path = emoji_paths.get(entity.entity_type.value)
+                        if emoji_path:
+                            entity.emoji_image_path = emoji_path
+                            entity.use_emoji = True
+                            entity.set_emoji_path_mapping(emoji_paths)
+                    
+                    logger.info(f"Enabled emoji rendering for {len(engine.simulator.entities)} entities")
+                
+                engine.simulator.initialize_entities = initialize_entities_with_emojis
             
             # Enable frame capture for video generation
             animation_config.export_frames = True
@@ -103,7 +148,7 @@ def generate_rps_video(
             logger.info(f"Battles fought: {simulation_results['simulation_stats']['battles_fought']}")
             logger.info(f"Duration: {simulation_results['simulation_stats']['simulation_time']:.1f}s")
         
-        # Step 2: Export simulation to video
+        # Step 3: Export simulation to video
         with LoggedOperation(logger, "video export from frames"):
             video_result = simulation_results.get('video_export', {})
             
@@ -115,7 +160,7 @@ def generate_rps_video(
             logger.info(f"Base video created: {Path(base_video_path).name}")
             logger.info(f"Video duration: {video_result['duration']:.1f}s")
         
-        # Step 3: Generate commentary audio (optional)
+        # Step 4: Generate commentary audio (optional)
         commentary_audio_path = None
         if add_commentary:
             with LoggedOperation(logger, "commentary generation"):
@@ -152,7 +197,7 @@ def generate_rps_video(
                 except Exception as e:
                     logger.warning(f"Commentary generation error: {e}")
         
-        # Step 4: Enhance video with audio and effects
+        # Step 5: Enhance video with audio and effects
         with LoggedOperation(logger, "video enhancement"):
             try:
                 with VideoClip(base_video_path) as video_clip:
@@ -269,6 +314,10 @@ def main():
     parser.add_argument('--commentary', action='store_true',
                        help='Add TTS commentary to video')
     
+    # Visual enhancement settings
+    parser.add_argument('--emojis', action='store_true',
+                       help='Use emoji rendering instead of colored circles')
+    
     # Advanced settings
     parser.add_argument('--preset', choices=['fast', 'balanced', 'chaos', 'epic'],
                        default='balanced', help='Simulation preset')
@@ -304,6 +353,7 @@ def main():
     logger.info(f"Entities: {args.entities}")
     logger.info(f"Max duration: {args.duration}s")
     logger.info(f"Resolution: {args.width}x{args.height} @ {args.fps}fps")
+    logger.info(f"Emoji rendering: {'enabled' if args.emojis else 'disabled'}")
     
     # Create configurations
     simulation_config = SimulationConfig(
@@ -327,7 +377,7 @@ def main():
         screen_width=args.width,
         screen_height=args.height,
         fps=args.fps,
-        background_color=(0, 0, 0),
+        background_color=(245, 245, 220, 255),  # Cream background for better emoji visibility
         export_frames=True,
         headless=True,
         show_stats=True,
@@ -340,7 +390,8 @@ def main():
         simulation_config=simulation_config,
         animation_config=animation_config,
         music_path=args.music,
-        add_commentary=args.commentary
+        add_commentary=args.commentary,
+        use_emojis=args.emojis
     )
     
     if result['success']:

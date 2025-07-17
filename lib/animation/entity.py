@@ -34,7 +34,7 @@ class RPSEntity:
         position: Current (x, y) position on screen
         velocity: Current (vx, vy) velocity vector
         radius: Entity radius for collision detection
-        color: RGB color tuple for rendering
+        color: RGBA color tuple for rendering
         mass: Entity mass for collision physics
         max_speed: Maximum speed limit
     """
@@ -43,23 +43,23 @@ class RPSEntity:
     position: Tuple[float, float]
     velocity: Tuple[float, float]
     radius: float = 20.0
-    color: Tuple[int, int, int] = (255, 255, 255)
+    color: Tuple[int, int, int, int] = (255, 255, 255, 255)
     mass: float = 1.0
     max_speed: float = 100.0
     
     def __post_init__(self):
         """Initialize entity with default colors based on type."""
-        if self.color == (255, 255, 255):  # Default white, set type-specific color
+        if self.color == (255, 255, 255, 255):  # Default white, set type-specific color
             self.color = self.get_default_color()
     
-    def get_default_color(self) -> Tuple[int, int, int]:
+    def get_default_color(self) -> Tuple[int, int, int, int]:
         """Get default color based on entity type."""
         color_map = {
-            EntityType.ROCK: (128, 128, 128),     # Gray
-            EntityType.PAPER: (255, 255, 255),    # White  
-            EntityType.SCISSORS: (255, 0, 0)      # Red
+            EntityType.ROCK: (128, 128, 128, 255),     # Gray, fully opaque
+            EntityType.PAPER: (255, 255, 255, 255),    # White, fully opaque
+            EntityType.SCISSORS: (255, 0, 0, 255)      # Red, fully opaque
         }
-        return color_map.get(self.entity_type, (255, 255, 255))
+        return color_map.get(self.entity_type, (255, 255, 255, 255))
     
     def update(self, dt: float, screen_width: int, screen_height: int) -> None:
         """

@@ -39,7 +39,7 @@ class AnimationConfig:
     screen_width: int = 800
     screen_height: int = 600
     fps: int = 60
-    background_color: Tuple[int, int, int] = (0, 0, 0)  # Black background
+    background_color: Tuple[int, int, int, int] = (0, 0, 0, 255)  # Black background, fully opaque
     
     # Export settings
     export_frames: bool = False
@@ -110,7 +110,8 @@ class AnimationEngine:
             os.environ['SDL_VIDEODRIVER'] = 'dummy'
         
         self.screen = pygame.display.set_mode(
-            (self.animation_config.screen_width, self.animation_config.screen_height)
+            (self.animation_config.screen_width, self.animation_config.screen_height),
+            pygame.SRCALPHA
         )
         pygame.display.set_caption("RPS Battle Simulation")
         
@@ -318,14 +319,14 @@ class AnimationEngine:
         
         self.screen.blit(fps_surface, text_rect)
     
-    def _get_entity_color(self, entity_type: str) -> Tuple[int, int, int]:
+    def _get_entity_color(self, entity_type: str) -> Tuple[int, int, int, int]:
         """Get display color for entity type."""
         color_map = {
-            'rock': (128, 128, 128),     # Gray
-            'paper': (255, 255, 255),    # White
-            'scissors': (255, 0, 0)      # Red
+            'rock': (128, 128, 128, 255),     # Gray, fully opaque
+            'paper': (255, 255, 255, 255),    # White, fully opaque
+            'scissors': (255, 0, 0, 255)      # Red, fully opaque
         }
-        return color_map.get(entity_type.lower(), (255, 255, 255))
+        return color_map.get(entity_type.lower(), (255, 255, 255, 255))
     
     def _prepare_frame_capture(self) -> None:
         """Prepare directory for frame capture."""
